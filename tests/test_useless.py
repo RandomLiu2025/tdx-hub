@@ -20,7 +20,7 @@ def remove_dep_holiday():
 @pytest.mark.skip(reason='暂时不做重复测试')
 def test_dep_command(recwarn, remove_dep_cli):
     with pytest.raises(SystemExit) as e:
-        from mootdx.__main__ import entry
+        from tdxhub.__main__ import entry
         entry()
 
     assert e.value.args[0] == -1, e.value.args[0]
@@ -32,7 +32,7 @@ def test_dep_command(recwarn, remove_dep_cli):
 
 @pytest.mark.skip(reason='暂时不做重复测试')
 def test_dep_holiday(recwarn, remove_dep_holiday):
-    from mootdx.utils.holiday import holiday2
+    from tdxhub.utils.holiday import holiday2
     holiday2('2022-01-23')
 
     assert len(recwarn) >= 1

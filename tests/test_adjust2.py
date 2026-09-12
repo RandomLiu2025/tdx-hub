@@ -2,7 +2,7 @@ import unittest
 
 import pytest
 
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 pytestmark = pytest.mark.network
 

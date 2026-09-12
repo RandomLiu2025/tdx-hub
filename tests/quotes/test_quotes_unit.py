@@ -3,10 +3,10 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from mootdx import config
-from mootdx.exceptions import MootdxValidationException
-from mootdx.quotes import Quotes, StdQuotes, valid_server
-from mootdx.utils import to_data
+from tdxhub import config
+from tdxhub.exceptions import TdxhubValidationException
+from tdxhub.quotes import Quotes, StdQuotes, valid_server
+from tdxhub.utils import to_data
 
 
 class FakeHqApi:
@@ -27,7 +27,7 @@ class FakeHqApi:
 
 
 def test_std_client_uses_default_when_bestip_is_empty(monkeypatch):
-    monkeypatch.setattr("mootdx.quotes.TdxHq_API", FakeHqApi)
+    monkeypatch.setattr("tdxhub.quotes.TdxHq_API", FakeHqApi)
     config.setup(force=True)
     config.set("BESTIP.HQ", "")
 
@@ -66,7 +66,7 @@ def test_bars_normalizes_prefixed_code_and_validates_window():
 
     assert not result.empty
     assert quotes.client.calls == [(9, 1, "600000", 0, 1)]
-    with pytest.raises(MootdxValidationException, match="offset"):
+    with pytest.raises(TdxhubValidationException, match="offset"):
         quotes.bars("600000", offset=0)
 
 

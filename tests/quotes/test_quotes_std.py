@@ -3,10 +3,10 @@ from datetime import datetime
 
 import pytest
 
-from mootdx.consts import MARKET_SH
-from mootdx.exceptions import MootdxValidationException
-from mootdx.logger import logger
-from mootdx.quotes import Quotes
+from tdxhub.consts import MARKET_SH
+from tdxhub.exceptions import TdxhubValidationException
+from tdxhub.logger import logger
+from tdxhub.quotes import Quotes
 
 pytestmark = pytest.mark.network
 
@@ -120,14 +120,14 @@ class TestStdRaises(unittest.TestCase):
         self.client = Quotes.factory(market='std', timeout=10, verbose=2)  # 标准市场
 
     def test_stock_count_raises(self):
-        with pytest.raises(MootdxValidationException) as e:
+        with pytest.raises(TdxhubValidationException) as e:
             self.client.stock_count(3)
 
         exec_msg = e.value.args[0]
         assert exec_msg == '市场代码错误'
 
     def test_stocks_raises(self):
-        with pytest.raises(MootdxValidationException) as e:
+        with pytest.raises(TdxhubValidationException) as e:
             self.client.stocks(2)
 
         exec_msg = e.value.args[0]

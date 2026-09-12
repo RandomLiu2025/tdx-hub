@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from mootdx.cache import file_cache
+from tdxhub.cache import file_cache
 
 
 def test_file_cache_reuses_fresh_dataframe(tmp_path):
@@ -34,7 +34,7 @@ def test_file_cache_refreshes_expired_dataframe(tmp_path, monkeypatch):
         return pd.DataFrame({"value": [calls]})
 
     first = sample()
-    monkeypatch.setattr("mootdx.cache.file.time.time", lambda: cache_file.stat().st_mtime + 101)
+    monkeypatch.setattr("tdxhub.cache.file.time.time", lambda: cache_file.stat().st_mtime + 101)
     second = sample()
 
     assert first.iloc[0, 0] == 1

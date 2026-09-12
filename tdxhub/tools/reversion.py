@@ -101,6 +101,7 @@ def _reversion(bfq_data: pd.DataFrame, xdxr_data: pd.DataFrame, type_: str) -> p
     factors = adjustment_factors(raw.index, actions)
     result = adjust_prices(raw, actions, method)
     result["adj"] = factors[f"{method}_mul"].to_numpy()
+    result["volume"] = result["volume"].astype(float) / result["adj"]
     return result.loc[result["open"].ne(0)]
 
 

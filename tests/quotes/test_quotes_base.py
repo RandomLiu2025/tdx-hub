@@ -2,7 +2,7 @@ import unittest
 
 import pytest
 
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 
 @pytest.mark.skip(reason='暂时不做重复测试')

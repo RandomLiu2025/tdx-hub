@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from mootdx.tools.reversion import factor_reversion, reversion
+from tdxhub.tools.reversion import factor_reversion, reversion
 
 
 @pytest.fixture
@@ -36,12 +36,25 @@ def test_reversion_preserves_trading_index(prices, actions, method):
     assert result[_OHLC].notna().all().all()
 
 
-def test_qfq_and_hfq_adjust_volume_in_opposite_directions(prices, actions):
+def test_cash_dividend_keeps_volume(prices, actions):
     qfq = reversion("600000", prices, actions, "qfq")
     hfq = reversion("600000", prices, actions, "hfq")
     assert qfq.iloc[0]["close"] < prices.iloc[0]["close"]
-    assert qfq.iloc[0]["volume"] > prices.iloc[0]["volume"]
     assert hfq.iloc[-1]["close"] > prices.iloc[-1]["close"]
+    # 现金分红不改变股本, 成交量不缩放
+    assert qfq["volume"].equals(prices["volume"])
+    assert hfq["volume"].equals(prices["volume"])
+
+
+def test_share_change_scales_volume(prices):
+    actions = pd.DataFrame(
+        {"category": [1], "fenhong": [0.0], "peigu": [0.0], "peigujia": [0.0], "songzhuangu": [10.0]},
+        index=[prices.index[2]],
+    )
+    qfq = reversion("600000", prices, actions, "qfq")
+    assert qfq.iloc[0]["close"] < prices.iloc[0]["close"]
+    assert qfq.iloc[0]["volume"] > prices.iloc[0]["volume"]
+    hfq = reversion("600000", prices, actions, "hfq")
     assert hfq.iloc[-1]["volume"] < prices.iloc[-1]["volume"]
 
 
@@ -50,7 +63,7 @@ def test_factor_reversion_aligns_only_to_trading_days(prices, monkeypatch):
         {"factor": [0.8, 1.0]},
         index=pd.to_datetime(["2024-01-01", "2024-01-05"]),
     )
-    monkeypatch.setattr("mootdx.tools.reversion.fq_factor", lambda symbol, method: factors)
+    monkeypatch.setattr("tdxhub.tools.reversion.fq_factor", lambda symbol, method: factors)
 
     result = factor_reversion("600000", "qfq", prices)
     assert result.index.equals(prices.index)

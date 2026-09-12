@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from mootdx import get_config_path
-from mootdx.utils.adjust import get_xdxr
+from tdxhub import get_config_path
+from tdxhub.utils.adjust import get_xdxr
 
 pytestmark = pytest.mark.network
 

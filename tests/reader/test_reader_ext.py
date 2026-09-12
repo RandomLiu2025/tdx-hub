@@ -1,6 +1,6 @@
 import unittest
 
-from mootdx.reader import Reader
+from tdxhub.reader import Reader
 from tests.conftest import is_empty
 
 

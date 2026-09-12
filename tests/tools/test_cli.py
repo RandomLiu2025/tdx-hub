@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from click.testing import CliRunner
 
-from mootdx import __version__
-from mootdx.__main__ import entry
+from tdxhub import __version__
+from tdxhub.__main__ import entry
 
 
 def test_cli_version():
