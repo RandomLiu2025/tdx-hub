@@ -4,7 +4,7 @@ from glob import glob
 
 import pandas as pd
 
-from mootdx.affair import Affair
+from tdxhub.affair import Affair
 
 logging.basicConfig(level=logging.INFO)
 

@@ -5,12 +5,12 @@ type: docker
 
 steps:
   - name: test
-    image: mootdx:ci
+    image: tdxhub:ci
     commands:
       - pytest -vs
 
   - name: pypi
-    image: mootdx:ci
+    image: tdxhub:ci
     commands:
       - python -m pip install poetry
       - python -m poetry publish --no-cache --build --username=__token__ --password=$PYPI_PASSWORD
@@ -23,14 +23,14 @@ steps:
         - refs/tags/**
 
 #  - name: sync
-#    image: mootdx:ci
+#    image: tdxhub:ci
 #    environment:
 #      SSH_KEY:
 #        from_secret: ssh_key
 #    commands:
 #      - echo "$SSH_KEY" > ~/.ssh/id_rsa
-#      - git remote add github git@github.com:mootdx/mootdx.git
-#      - git remote add gitee git@gitee.com:ibopo/mootdx.git
+#      - git remote add github git@github.com:tdxhub/tdxhub.git
+#      - git remote add gitee git@gitee.com:ibopo/tdxhub.git
 #      - git checkout develop
 #      - git pull gitee develop
 #      - git push gitee develop
@@ -38,7 +38,7 @@ steps:
 #      - git push github develop
 #
 #  - name: publish
-#    image: mootdx:ci
+#    image: tdxhub:ci
 #    environment:
 #      USERNAME:
 #        from_secret: username

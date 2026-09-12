@@ -25,7 +25,7 @@
 # # https://www.cnblogs.com/weidu/p/9831807.html
 # import pandas as pd
 #
-# from mootdx.quotes import Quotes
+# from tdxhub.quotes import Quotes
 #
 #
 # def calc_fuquan_use_fenhong(df, df_fenhong):

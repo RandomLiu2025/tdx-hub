@@ -17,7 +17,7 @@
 **调用方法：**
 
 ```python
-from mootdx.contrib.adjust import get_adjust_year
+from tdxhub.contrib.adjust import get_adjust_year
 
 get_adjust_year(symbol='000001', year='2021', factor='01')
 ```
@@ -59,7 +59,7 @@ date
 **调用方法：**
 
 ```python
-from mootdx.tools import tdx2csv
+from tdxhub.tools import tdx2csv
 
 tdx2csv.txt2csv(infile='sz#000001.txt', outfile='sz#000001.csv')
 ```
@@ -80,7 +80,7 @@ tdx2csv.txt2csv(infile='sz#000001.txt', outfile='sz#000001.csv')
 **调用方法：**
 
 ```python
-from mootdx.tools import tdx2csv
+from tdxhub.tools import tdx2csv
 
 tdx2csv.batch(src='c:/tdx/export', dst='c:/tdx/output')
 ```
@@ -100,7 +100,7 @@ tdx2csv.batch(src='c:/tdx/export', dst='c:/tdx/output')
 **调用方法：**
 
 ```python
-from mootdx.utils import holiday
+from tdxhub.utils import holiday
 
 # 判断一个日期是否是法定节假日 （tdx接口）
 holiday.holiday(date='20200202', format_='%Y%m%d', country='中国')
@@ -135,7 +135,7 @@ holiday.holiday()
 **调用方法：**
 
 ```python
-from mootdx.tools.customize import Customize
+from tdxhub.tools.customize import Customize
 
 # 初始化一个自定义版本操作对象, tdxdir 可根据具体情况修改
 custom = Customize(tdxdir='C:/new_tdx')

@@ -1,6 +1,26 @@
 ## 扩展行情接口
 
-> 注意：扩展市场目前已经失效无法使用
+扩展行情使用通达信 EX 主站，可读取港股、期货等服务器实际提供的品种。具体市场和品种
+以当前节点的 `markets()`、`instruments()` 返回为准；公共节点可用性及字段单位可能变化。
+
+构造参数与标准行情一致，默认启用单连接运行时容灾：
+
+```python
+from tdxhub.quotes import Quotes
+
+client = Quotes.factory(
+    market='ext',
+    timeout=5,
+    failover=True,
+    max_failovers=2,
+    unhealthy_cooldown=60,
+    max_candidates=5,
+)
+print(client.server_status())
+```
+
+显式传入 `server` 时只使用该节点；只有同时设置 `fallback_servers=True` 才会追加配置中的
+EX 节点。`failover=False` 可关闭跨节点切换，`auto_retry` 仍负责当前节点内的重连。
 
 ## 01. 获取市场代码
 
@@ -9,7 +29,7 @@
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='ext')
 client.markets()
@@ -29,7 +49,7 @@ client.markets()
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='ext')
 client.instrument(start=0, offset=100)
@@ -43,7 +63,7 @@ client.instruments()
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='ext')
 client.instrument_count()
@@ -60,7 +80,7 @@ client.instrument_count()
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='ext')
 client.quote(market=47, symbol="IF1709")
@@ -79,7 +99,7 @@ client.quote(symbol="47#IF1709")
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='ext')
 client.minute(market=47, symbol='IF1709')
@@ -98,7 +118,7 @@ client.minute(symbol="47#IF1709")
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='ext')
 client.minutes(market=47, symbol='IF1709')
@@ -111,7 +131,7 @@ client.minutes(symbol="47#IF1709")
 
 ** 参数说明: **
 
-- frequency: K线周期参考 `mootdx.consts`
+- frequency: K线周期参考 `tdxhub.consts`
 - market: 市场代码. 场ID可以通过 `markets` 方法获得
 - symbol: 证券代码
 - start: 起始位置
@@ -120,8 +140,8 @@ client.minutes(symbol="47#IF1709")
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
-from mootdx.consts import KLINE_DAILY
+from tdxhub.quotes import Quotes
+from tdxhub.consts import KLINE_DAILY
 
 client = Quotes.factory(market='ext')
 client.bars(frequency=KLINE_DAILY, market=47, symbol="47#IF1709", start=0, offset=100)
@@ -140,7 +160,7 @@ client.bars(frequency=KLINE_DAILY, symbol="47#IF1709", start=0, offset=100)
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='ext')
 client.transaction(31, "00020")
@@ -156,7 +176,7 @@ client.transaction("31#00020")
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='ext')
 client.transaction(market=31, symbol='00020')
@@ -178,7 +198,7 @@ client.transaction("31#00020")
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='ext')
 client.transactions(market=47, symbol='IFL0', date='20170810', start=1800)

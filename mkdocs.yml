@@ -1,4 +1,4 @@
-site_name: MOOTDX
+site_name: TDXHUB
 site_description: 基于 Pytdx 数据接口的二次封装
 
 theme: readthedocs
@@ -17,6 +17,7 @@ nav:
     - 财务数据: api/affair.md
     - 财务对照: api/fields.md
     - 辅助函数: api/extras.md
+    - Go tdx 迁移能力: api/migration.md
 
   - 命令行工具:
     - 线路测试: cli/bestip.md

@@ -67,3 +67,6 @@ target/
 
 .idea
 .DS_Store
+
+# Local agent runtime (never commit session state)
+.harness_local/

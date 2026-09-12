@@ -1,4 +1,4 @@
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market="std", quiet=True)  # 标准市场
 # client = Quotes.factory(market='ext', multithread=True, heartbeat=True) # 扩展市场
@@ -13,7 +13,7 @@ client = Quotes.factory(market="std", quiet=True)  # 标准市场
 # print(quote)
 
 # client = Quotes.factory(market='std')
-# from mootdx.logger import logger, logger
+# from tdxhub.logger import logger, logger
 #
 # # logger.remove()
 #

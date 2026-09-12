@@ -1,4 +1,4 @@
-from mootdx.reader import Reader
+from tdxhub.reader import Reader
 
 # 初始化通达信文件读取类
 reader = Reader.factory(market="std", tdxdir="../fixtures")  # 标准市场

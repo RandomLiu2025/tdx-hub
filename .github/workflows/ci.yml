@@ -1,0 +1,30 @@
+name: Python CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package and tests
+        run: python -m pip install --upgrade pip ".[all,test]"
+      - name: Run deterministic test suite
+        run: python -m pytest
+      - name: Build wheel
+        run: python -m pip wheel --no-deps --wheel-dir dist .
+      - name: Verify wheel package data
+        run: python -c "import glob, zipfile; wheel = glob.glob('dist/*.whl')[0]; assert 'tdxhub/utils/holiday.js' in zipfile.ZipFile(wheel).namelist()"

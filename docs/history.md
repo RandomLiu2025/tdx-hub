@@ -144,7 +144,7 @@
 ## v0.9.10 (2022-12-05)
 
 * 修复若干一些小问题
-* 修复升级 mootdx 而不能自动升级 tdxpy 问题
+* 修复升级 tdxhub 而不能自动升级 tdxpy 问题
 * 复权数据加缓存, 当天数据不会重复读取除权接口
 
 ## v0.9.0 (2022-05-13)
@@ -160,7 +160,7 @@
 
 ## v0.8.13 (2022-05-07)
 
-* [自定义版本增删改查](https://www.mootdx.com/zh_CN/latest/api/extras/#05)
+* [自定义版本增删改查](https://www.tdxhub.com/zh_CN/latest/api/extras/#05)
 
 ## v0.8.7 (2021-01-28)
 
@@ -193,8 +193,8 @@
 
 ### Add
 
-* 添加交易日历列表数据 (说明文档: https://mootdx.readthedocs.io/zh_CN/latest/extras/#04)
-* 增加新浪复权因子数据接口，并对TDX行情接口数据进行复权计算(较慢, 已加缓存机制, 暂时过渡使用) (对应文档: https://mootdx.readthedocs.io/zh_CN/latest/quote1)
+* 添加交易日历列表数据 (说明文档: https://github.com/RandomLiu2025/tdx-hub/tree/main/docs/zh_CN/latest/extras/#04)
+* 增加新浪复权因子数据接口，并对TDX行情接口数据进行复权计算(较慢, 已加缓存机制, 暂时过渡使用) (对应文档: https://github.com/RandomLiu2025/tdx-hub/tree/main/docs/zh_CN/latest/quote1)
 
 ## v0.7.21 (2021-09-24)
 

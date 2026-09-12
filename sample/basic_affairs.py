@@ -1,6 +1,6 @@
 from prettytable import PrettyTable
 
-from mootdx.affair import Affair
+from tdxhub.affair import Affair
 
 df = Affair.files()
 

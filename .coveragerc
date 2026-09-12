@@ -1,9 +1,9 @@
 [report]
 include= =
-    mootdx/*.py
+    tdxhub/*.py
 omit =
-    mootdx/parser/ext/*.py
-    mootdx/exhq.py
+    tdxhub/parser/ext/*.py
+    tdxhub/exhq.py
 
 skip_covered = true
 sort = -cover

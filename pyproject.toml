@@ -3,11 +3,11 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mootdx_plus"
-version = "0.12.0"
+name = "tdxhub-sdk"
+version = "0.1.0"
 description = "通达信本地数据、行情与财务数据读取工具"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = "MIT"
 authors = [{name = "bopo", email = "ibopo@126.com"}]
 keywords = ["tongdaxin", "tdx", "finance", "market-data", "pandas"]
@@ -16,6 +16,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -24,6 +25,7 @@ classifiers = [
 dependencies = [
     "click>=8.1,<9",
     "httpx>=0.27,<1",
+    "numpy>=1.26,<3",
     "pandas>=2.2,<4",
     "prettytable>=3.10,<4",
     "tdxpy>=0.2.7,<1",
@@ -35,21 +37,32 @@ dependencies = [
 # Kept for compatibility: CLI dependencies are now installed with the core package.
 cli = []
 holiday = ["mini-racer>=0.12,<1"]
-all = ["mini-racer>=0.12,<1"]
+server = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+]
+all = [
+    "mini-racer>=0.12,<1",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+]
 test = ["pytest>=8.3,<9"]
 
 [project.scripts]
-mootdx = "mootdx.__main__:entry"
+tdxhub = "tdxhub.__main__:entry"
 
 [project.urls]
-Homepage = "https://github.com/mootdx/mootdx"
-Documentation = "https://mootdx.readthedocs.io/"
-Repository = "https://github.com/mootdx/mootdx"
-Issues = "https://github.com/mootdx/mootdx/issues"
+Homepage = "https://github.com/RandomLiu2025/tdx-hub"
+Documentation = "https://github.com/RandomLiu2025/tdx-hub/tree/main/docs/"
+Repository = "https://github.com/RandomLiu2025/tdx-hub"
+Issues = "https://github.com/RandomLiu2025/tdx-hub/issues"
 
 [tool.setuptools.packages.find]
-include = ["mootdx*"]
+include = ["tdxhub*"]
 exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+"tdxhub.utils" = ["holiday.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -58,12 +71,11 @@ markers = [
     "network: requires live public network services",
     "integration: exercises an external local data installation",
 ]
-asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 line-length = 120
-extend-exclude = ["mootdx/utils/demjson.py"]
+extend-exclude = ["tdxhub/utils/demjson.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -71,7 +83,7 @@ ignore = ["E501"]
 
 [tool.coverage.run]
 branch = true
-source = ["mootdx"]
+source = ["tdxhub"]
 
 [tool.coverage.report]
 show_missing = true

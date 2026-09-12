@@ -19,4 +19,4 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
-exclude: ^(docs/|mootdx/utils/demjson\.py|tests/fixtures/)
+exclude: ^(docs/|tdxhub/utils/demjson\.py|tests/fixtures/)

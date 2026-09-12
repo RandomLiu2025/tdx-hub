@@ -1,5 +1,5 @@
-from mootdx.server import bestip
-from mootdx.server import server
+from tdxhub.server import bestip
+from tdxhub.server import server
 
 bestip()
 

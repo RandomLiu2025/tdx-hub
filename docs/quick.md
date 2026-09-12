@@ -3,13 +3,13 @@
 ## 使用最快的服务器
 
 ```shell
-python -m mootdx bestip -vv
+python -m tdxhub bestip -vv
 ```
 
 ## 离线数据读取
 
 ```python
-from mootdx.reader import Reader
+from tdxhub.reader import Reader
 
 # market: 参数 `std` 为标准市场(就是股票), `ext` 为扩展市场(期货，黄金等)
 # tdxdir: 是通达信的数据目录, 根据自己的情况修改
@@ -30,7 +30,7 @@ reader.fzline(symbol='600036')
 
 ```python
 
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 # 标准市场
 client = Quotes.factory(market='std', multithread=True, heartbeat=True, bestip=True, timeout=15)
@@ -41,7 +41,8 @@ client.bars(symbol='600036', frequency=9, offset=10)
 # 指数
 client.index(symbol='000001', frequency=9)
 
-# 分钟
+# 当日分时；返回 datetime 列及同名 DatetimeIndex
+# 标准 240 点对应 09:31～11:30、13:01～15:00
 client.minute(symbol='000001')
 
 ```
@@ -50,7 +51,7 @@ client.minute(symbol='000001')
 
 ```python
 
-from mootdx.affair import Affair
+from tdxhub.affair import Affair
 
 # 远程文件列表
 files = Affair.files()

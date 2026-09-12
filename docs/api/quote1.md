@@ -9,7 +9,7 @@
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 ```
@@ -17,17 +17,51 @@ client = Quotes.factory(market='std')
 ### 其他参数
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
-client = Quotes.factory(market='std', multithread=True, heartbeat=True, bestip=False, timeout=15)
-# multithread 多线程
+client = Quotes.factory(
+    market='std',
+    multithread=True,
+    heartbeat=True,
+    bestip=False,
+    timeout=15,
+    failover=True,
+    max_failovers=2,
+    unhealthy_cooldown=60,
+    max_candidates=5,
+)
+# multithread 启用 tdxpy 客户端锁
 # heartbeat 开启心跳包
 # bestip 重新测试最快服务器
-# server 自行设置服务器IP, 格式 `server=('127.0.0.1', 7727)`
-# timeout 设置超时时间
-# quiet 日志静默方式, 默认False, 设置为 True 则不打印日志信息
-# verbose 日志显示等级 0, 静默模式, 1 一般级别, 2 详细级别
+# server 自行设置服务器 IP，例如 server=('127.0.0.1', 7709)
+# timeout 连接与请求超时时间
+# failover 请求失败后是否切换服务器，默认 True
+# max_failovers 单次请求最多切换的服务器数量，默认 2
+# unhealthy_cooldown 故障服务器冷却秒数，默认 60
+# max_candidates 构造时最多保留的健康候选服务器数，默认 5
 ```
+
+默认按 `BESTIP.HQ`、配置服务器的顺序探测，运行时仅保持一个活动连接。网络、连接或
+TDX 协议调用失败时，会先由 `auto_retry` 重连当前节点；仍失败后再切换候选节点并重放
+当前只读请求。空结果和参数校验错误不会触发切换。
+
+显式传入 `server` 时默认只使用该节点。如需指定节点失败后回退到公共节点，请设置
+`fallback_servers=True`：
+
+```python
+client = Quotes.factory(
+    'std',
+    server=('127.0.0.1', 7709),
+    fallback_servers=True,
+)
+
+# 查看活动节点、连续失败数、冷却剩余时间和最近错误
+print(client.server_status())
+```
+
+`raise_exception=False`（默认）会在全部尝试失败后返回空结果；设置为 `True` 时抛出最后
+一个底层连接/协议异常。构造阶段所有候选节点均不可用时始终抛出
+`TdxhubConnectionError`。
 
 ## 01. 查询实时行情
 
@@ -39,12 +73,17 @@ client = Quotes.factory(market='std', multithread=True, heartbeat=True, bestip=F
 
 返回值：
 
-- pd.DataFrame
+- `pd.DataFrame`
+- 常用字段包括 `market`、`code`、`price`、`last_close`、`open`、`high`、`low`、
+  `servertime`、`vol`、`volume`、`cur_vol`、`amount`、`s_vol`、`b_vol`，以及五档
+  `bid` / `ask` 价格和数量字段。实际字段可能随行情服务器和证券状态有所差异。
+- `active1`、`active2` 和所有 `reversed_bytes*` 字段属于底层协议保留字段，不作为
+  稳定业务数据返回。
 
 **调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.quotes(symbol=["000001", "600300"])
@@ -73,7 +112,7 @@ client.quotes(symbol=["000001", "600300"])
 **调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.bars(symbol='600036', frequency=9, offset=10)
@@ -85,39 +124,51 @@ client.bars(symbol='600036', adjust='qfq')
 client.bars(symbol='600036', adjust='hfq')
 ```
 
-## 03. 查询股票数量
+## 03. 查询证券数量
 
-** 参数说明: **
+**参数说明：**
 
-- market: 市场代码. 0 - 深圳, 1 - 上海 (可以使用常量 `MARKET_SZ`, `MARKET_SH` 代替)
+- `market`：市场代码，`0` - 深圳、`1` - 上海、`2` - 北京；沪深市场也可使用
+  `MARKET_SZ`、`MARKET_SH` 常量。
+- `security_type`：可选证券类型。支持 `a_stock`、`b_stock`、`index`、`etf`、
+  `fund`、`bond`、`other`；`None` 表示不筛选。
 
-** 调用方法：**
+不传 `security_type` 时直接使用行情服务器的快速计数。指定类型时需要拉取完整市场目录后过滤，
+因此速度慢于不筛选的计数。
+
+**调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
-from mootdx import consts
+from tdxhub import consts
+from tdxhub.quotes import Quotes
 
-client = Quotes.factory(market='std')
-client.stock_count(market=consts.MARKET_SH)
+client = Quotes.factory(market="std")
+all_security_count = client.stock_count(market=consts.MARKET_SH)
+etf_count = client.stock_count(market=consts.MARKET_SH, security_type="etf")
 ```
 
-## 04. 查询股票列表
+## 04. 查询证券列表
 
-** 参数说明: **
+**参数说明：**
 
-- market: 市场代码. 0 - 深圳, 1 - 上海 (可以使用常量 `MARKET_SZ`, `MARKET_SH` 代替)
+- `market`：市场代码，含义同 `stock_count()`。
+- `security_type`：可选证券类型，含义同 `stock_count()`。参数忽略大小写和首尾空格。
 
-> 注意，在引入 consts 之后， （`from mootdx import consts`）
-> 我们可以使用 consts.MARKET_SH , consts.MARKET_SZ 常量来代替 1 和 0 作为参数
+结果保持行情目录原有列和顺序，不额外增加分类列；筛选后的行索引从 `0` 重新开始。
+`fund` 只返回 ETF 以外的基金。
 
-** 调用方法：**
+**调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
-from mootdx import consts
+from tdxhub import consts
+from tdxhub.quotes import Quotes
 
-client = Quotes.factory(market='std')
-symbol = client.stocks(market=consts.MARKET_SH)
+client = Quotes.factory(market="std")
+all_symbols = client.stocks(market=consts.MARKET_SH)
+indexes = client.stocks(market=consts.MARKET_SH, security_type="index")
+etfs = client.stocks(market=consts.MARKET_SH, security_type="etf")
+latest = client.stocks(market=consts.MARKET_SH, refresh=True)
+a_stocks = client.stock_all(security_type="a_stock")  # 合并深、沪、北三个市场
 ```
 
 ## 05. 指数K线行情
@@ -148,8 +199,8 @@ symbol = client.stocks(market=consts.MARKET_SH)
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
-from mootdx.consts import MARKET_SH
+from tdxhub.quotes import Quotes
+from tdxhub.consts import MARKET_SH
 
 client = Quotes.factory(market='std')
 client.index(frequency=9, market=MARKET_SH, symbol='000001', start=1, offset=2)
@@ -157,7 +208,7 @@ client.index(frequency=9, market=MARKET_SH, symbol='000001', start=1, offset=2)
 
 ## 06. 查询分时行情
 
-> 网友反馈，此接口数据有误，不建议使用，可以使用 后面的 `历史分时行情` 来替代
+> 此接口复用历史分时协议查询当日数据。协议不携带时间字段，tdxhub 会按 A 股交易时段补齐 `datetime` 列和同名 `DatetimeIndex`。
 
 ** 参数说明: **
 
@@ -166,11 +217,24 @@ client.index(frequency=9, market=MARKET_SH, symbol='000001', start=1, offset=2)
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.minute(symbol='000001')
 ```
+
+标准 240 个点依次对应 `09:31～11:30` 和 `13:01～15:00`；盘中不足 240 条时从 `09:31` 起顺序映射。`09:30` 集合竞价数据请使用 `minute_241()`。
+
+```python
+# 默认仅返回行情节点中的最新交易日；收盘后最多 241 条，盘中少于 241 条
+latest = client.minute_241(symbol="600519")
+
+# 显式传入 since 时返回起始日期以来的多个交易日，每个完整交易日最多 241 条
+history = client.minute_241(symbol="600519", since="20260901")
+```
+
+`minute_241()` 会为每个返回的交易日单独构造 `09:30` 集合竞价柱。方法名中的
+“241”表示单个完整交易日的分钟点数量，不表示日期范围查询的结果总行数固定为 241。
 
 ## 07. 历史分时行情
 
@@ -183,13 +247,15 @@ client.minute(symbol='000001')
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.minutes(symbol='000001', date='20171010')
 ```
 
-注意，在引入 consts 之后， （`from mootdx import consts`） 我们可以使用 consts.MARKET_SH , consts.MARKET_SZ 常量来代替 1 和 0 作为参数
+历史结果同样包含指定日期的 `datetime` 列和同名 `DatetimeIndex`。
+
+注意，在引入 consts 之后， （`from tdxhub import consts`） 我们可以使用 consts.MARKET_SH , consts.MARKET_SZ 常量来代替 1 和 0 作为参数
 
 ## 08. 查询分笔成交
 
@@ -202,7 +268,7 @@ client.minutes(symbol='000001', date='20171010')
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.transaction(symbol='600036', start=0, offset=10)
@@ -220,7 +286,7 @@ client.transaction(symbol='600036', start=0, offset=10)
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.transactions(symbol='000001', start=0, offset=10, date='20170209')
@@ -238,7 +304,7 @@ client.transactions(symbol='000001', start=0, offset=10, date='20170209')
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.F10C(symbol='000001')
@@ -246,21 +312,31 @@ client.F10C(symbol='000001')
 
 ## 11. 公司信息详情
 
-** 参数说明: **
+`F10()` 将公司信息目录和正文统一为固定列 `pandas.DataFrame`，不再根据参数返回字符串、
+字典或 `None`。
 
-- symbol: 股票代码.
-- name: 公司详情标题. 可使用`F10C`获取
+**参数说明：**
+
+- `symbol`：股票代码。
+- `name`：可选的公司详情标题，可使用 `F10C()` 查看；标题按去除首尾空白后的值精确匹配。
 
 **调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
-client.F10(symbol='000001', name='最新提示')
+all_sections = client.F10(symbol='000001')
+latest = client.F10(symbol='000001', name='最新提示')
 ```
 
-注意这里的 公司详情标题 参考上面接口的返回结果。
+固定列为 `full_code`、`exchange`、`market_id`、`code`、`section`、`filename`、
+`start`、`length`、`content`。不传 `name` 时按服务端目录顺序返回全部栏目；指定标题时返回
+零行或一行。目录为空或标题不存在时返回具有相同列的空 DataFrame，不会退化为读取全部栏目。
+
+`content` 会统一换行为 `LF`、移除行尾空白与正文首尾空行，并将多个连续空行压缩为一个；
+行首缩进和字符表格保持不变。若需要未经整理的目录或原始区间正文，请分别使用 `F10C()` 和
+`company_content()`。
 
 ## 12. 除权除息信息
 
@@ -271,7 +347,7 @@ client.F10(symbol='000001', name='最新提示')
 ** 调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.xdxr(symbol='600036')
@@ -286,7 +362,7 @@ client.xdxr(symbol='600036')
 **调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.finance(symbol="600300")
@@ -304,7 +380,7 @@ client.finance(symbol="600300")
 **调用方法：**
 
 ```python
-from mootdx.quotes import Quotes
+from tdxhub.quotes import Quotes
 
 client = Quotes.factory(market='std')
 client.k(symbol="600300", begin="2017-07-03", end="2017-07-10")
@@ -324,3 +400,69 @@ client.ohlc(symbol="600300", begin="2017-07-03", end="2017-07-10", adjust='qfq')
 # 后复权
 client.ohlc(symbol="600300", begin="2017-07-03", end="2017-07-10", adjust='hfq')
 ```
+
+## 15. 在线查询通达信与申万行业
+
+标准行情客户端可以下载行情服务器发布的 `tdxhy.cfg` 和 `zhb.zip/incon.dat`，关联证券的
+通达信行业与申万行业，无需本地通达信安装目录。
+
+```python
+from tdxhub.quotes import Quotes
+
+with Quotes.factory(market="std", timeout=5) as client:
+    all_industries = client.stock_industries()
+    one = client.stock_industries("SH.600519")
+    selected = client.stock_industries(["sz000001", "sh600519"])
+    refreshed = client.stock_industries("sh600519", refresh=True)
+```
+
+- `symbols` 可省略，也可传单个代码或代码列表/元组；批量结果保持输入顺序。
+- 输出包含 `market`、`code`、`tdx_industry_code/name/source`、
+  `sw_industry_code/name/source`、`sw_level1_code/name`、`sw_level2_code/name`、
+  `sw_level3_code/name`、`source` 和 `raw_fields`。
+- 新版 `TDXRSHY` 与旧版 `SWHY` 编码都会展开到实际存在的层级；父级名称只在当前命中的
+  字典分区内查找。字典缺少父级时保留可推导的父级代码，名称返回空值。
+- 完整关联结果在进程内全局共享，并持久化到 `~/.tdxhub/caches/quotes`；默认每 24 小时
+  在下一次访问时更新，`refresh=True` 强制重新下载。
+- 返回值是缓存的独立副本，调用方修改 DataFrame 或其对象列/`attrs` 不会影响后续查询。
+- 自动到期更新失败时临时回退到旧数据并在 5 分钟后重试；显式刷新失败会直接抛错。
+- 这是行情服务器发布的行业配置，而非逐笔实时行情；数据新鲜度取决于服务器文件版本。
+
+## 16. 聚合证券信息
+
+`stock_info()` 将证券目录、实时行情、行业、财务、除权除息和集合竞价合并成一行，适合一次
+读取展示或筛选所需的常用字段：
+
+```python
+from tdxhub.quotes import Quotes
+
+with Quotes.factory(market="std", timeout=5) as client:
+    info = client.stock_info(["SH.600519", "sz000001", "bj920001"])
+
+    # 串行诊断，或在 1..16 范围内调整本次调用的并发度
+    serial = client.stock_info("sh600519", max_workers=1)
+
+    # 强制刷新当前调用涉及的市场目录和行业配置
+    refreshed = client.stock_info(
+        "sh600519",
+        refresh_directories=True,
+        refresh_industries=True,
+    )
+```
+
+返回固定 37 列的 `pandas.DataFrame`：
+
+- 标识与分类：`full_code`、`exchange`、`market_id`、`code`、`name`、`category`、`board`；
+- 行情与衍生值：最新/昨收/开高低、涨跌额/幅、成交量/额、开盘竞价金额、流通/总股本、
+  换手率、流通/总市值；
+- 财务与行业：`eps`、上市/更新日期、通达信行业和申万一至三级行业。
+
+结果只包含规范化后的标量字段，不保留证券目录、实时行情和财务接口的原始字典。
+
+输入可以是单个代码或列表/元组，结果保持原顺序与重复项；相同证券的底层数据只拉取一次。
+北交所证券当前只聚合目录与行业，不调用仅覆盖沪深的实时、财务、XDXR 和集合竞价接口。
+
+默认 `max_workers=4`。沪深证券的 `finance()`、`xdxr()`、`call_auction()` 使用独立 TCP
+连接并发请求，连接由当前 `StdQuotes` 实例的有界连接池复用，并在 `close()` 或上下文退出时
+释放。`max_workers` 必须是 `1..16` 的非布尔整数；市场目录跨实例共享并持久化，
+`refresh_directories=True` 可强制刷新。
