@@ -110,6 +110,17 @@ class ReaderBase:
             candidate = self.vipdoc / market / subdir / f"{symbol}.{extension}"
             if candidate.is_file():
                 return candidate
+        # 扩展市场文件名常含大写字母, 在大小写敏感的文件系统上做忽略大小写的匹配
+        return self._match_ignorecase(market, subdir, symbol, suffixes)
+
+    def _match_ignorecase(self, market: str, subdir: str, symbol: str, suffixes: Sequence[str]) -> Path | None:
+        directory = self.vipdoc / market / subdir
+        if not directory.is_dir():
+            return None
+        wanted = [f"{symbol}.{extension}".lower() for extension in suffixes]
+        for candidate in sorted(directory.iterdir()):
+            if candidate.is_file() and candidate.name.lower() in wanted:
+                return candidate
         return None
 
 
