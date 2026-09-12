@@ -415,10 +415,6 @@ uv build
 
 ## 文档
 
-- [迁移能力使用指南](docs/api/migration.md)
-- [架构与迁移设计](docs/design/202609101744-port-go-data-capabilities.md)
-- [实施计划](IMPLEMENTATION_PLAN.md)
-
 ## License
 
 [MIT License](LICENSE)
