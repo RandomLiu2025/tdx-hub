@@ -9,7 +9,7 @@ description = "通达信本地数据、行情与财务数据读取工具"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{name = "randon", email = ""}]
+authors = [{name = "randon"}]
 keywords = ["tongdaxin", "tdx", "finance", "market-data", "pandas"]
 classifiers = [
     "Development Status :: 4 - Beta",
