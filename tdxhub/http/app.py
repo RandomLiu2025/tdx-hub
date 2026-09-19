@@ -1,7 +1,5 @@
 """Optional FastAPI application for tdxhub market-data services."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from typing import Any
 
@@ -119,16 +117,20 @@ def create_app(service: MarketDataService) -> Any:
         )
 
     @app.get("/tdx/stat")
-    def statistics() -> JSONResponse:
-        return invoke(service.statistics)
+    def statistics(codes: str | None = None) -> JSONResponse:
+        return invoke(service.statistics, codes=codes)
 
     @app.get("/tdx/stat2")
     def money_flow() -> JSONResponse:
         return invoke(service.money_flow)
 
     @app.get("/tdx/xgsg")
-    def xgsg() -> JSONResponse:
+    @app.get("/ipo")
+    def xgsg(code: str | None = None) -> JSONResponse:
+        if code is not None:
+            return invoke(service.xgsg, code=code)
         return invoke(service.xgsg)
+
 
     @app.get("/index")
     def index_kline(
@@ -290,6 +292,27 @@ def create_app(service: MarketDataService) -> Any:
     @app.get("/trade/history/day")
     def history_trade_day(date: str, code: str) -> JSONResponse:
         return invoke(service.history_trade_day, date=date, code=code)
+
+    @app.get("/capital_flow")
+    def capital_flow(code: str, date: str | None = None) -> JSONResponse:
+        return invoke(service.capital_flow, code=code, date=date)
+
+    @app.get("/capital_flow/history")
+    @app.get("/capital_flow_history")
+    def capital_flow_history(
+        code: str,
+        days: int = Query(default=20, ge=1, le=100),
+    ) -> JSONResponse:
+        return invoke(service.capital_flow_history, code=code, days=days)
+
+    @app.get("/capital_flow/sector")
+    @app.get("/capital_flow/block")
+    def sector_capital_flow(
+        name: str | None = None,
+        codes: str | None = None,
+        date: str | None = None,
+    ) -> JSONResponse:
+        return invoke(service.sector_capital_flow, name=name, codes=codes, date=date)
 
     @app.get("/ex/markets")
     def ext_markets() -> JSONResponse:

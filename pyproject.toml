@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tdxhub-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "通达信本地数据、行情与财务数据读取工具"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{name = "bopo", email = "ibopo@126.com"}]
+authors = [{name = "randon", email = ""}]
 keywords = ["tongdaxin", "tdx", "finance", "market-data", "pandas"]
 classifiers = [
     "Development Status :: 4 - Beta",

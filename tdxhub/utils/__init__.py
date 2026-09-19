@@ -31,6 +31,9 @@ def _normalize_symbol(symbol: str) -> tuple[str | None, str]:
     return match.group(1), match.group(2)
 
 
+normalize_symbol = _normalize_symbol
+
+
 def get_stock_markets(symbols=None):
     """Normalize a collection of security codes for ``tdxpy``.
 
@@ -58,7 +61,7 @@ def get_stock_market(symbol='', string=False):
         if symbol.startswith("920"):
             market = "bj"
         # 上交所SH 前缀全集（支持两位和三位）
-        elif symbol.startswith(("60", "68", "50", "51", "110", "113", "132", "204", "90")):
+        elif symbol.startswith(("60", "68", "50", "51", "52", "56", "58", "110", "113", "132", "204", "90")):
             market = "sh"
         # 深市逆回购特殊四位前缀，避免被13前缀误判（必须放在sz前缀之前）
         elif symbol.startswith("1318"):

@@ -466,3 +466,117 @@ with Quotes.factory(market="std", timeout=5) as client:
 连接并发请求，连接由当前 `StdQuotes` 实例的有界连接池复用，并在 `close()` 或上下文退出时
 释放。`max_workers` 必须是 `1..16` 的非布尔整数；市场目录跨实例共享并持久化，
 `refresh_directories=True` 可强制刷新。
+
+## 17. 资金流向与主力监控 (Capital Flow)
+
+基于全量逐笔分笔（Tick）成交数据，与同花顺、东方财富、通达信等主流软件标准算法对齐，提供高精度的超大单、大单、中单、小单切片及主力/散户博弈分析。
+
+### 17.1 实时与单日资金流向 (`capital_flow`)
+
+```python
+from tdxhub.quotes import Quotes
+
+with Quotes.factory("std", timeout=5) as client:
+    # 盘中实时（默认当日全量逐笔）
+    flow = client.capital_flow("002594")
+
+    # 历史单日（自动缓存加速）
+    hist_flow = client.capital_flow("600519", date="20260914")
+
+    # 提取核心汇总属性
+    print("主力净买入(元):", flow.attrs["main_net"])
+    print("主力净流入占比:", f"{flow.attrs['main_net_pct']}%")
+    print("散户净买入(元):", flow.attrs["retail_net"])
+    print("全天总成交额(元):", flow.attrs["total_turnover"])
+```
+
+- **分档标准**（可通过 `thresholds` 自定义，默认 `(40000, 200000, 1000000)`）：
+  - 超大单：$\ge 100$ 万元
+  - 大单：$20 \sim 100$ 万元
+  - 中单：$4 \sim 20$ 万元
+  - 小单：$< 4$ 万元
+  - 主力 = 超大单 + 大单；散户 = 中单 + 小单
+- 返回包含各档位买入额、卖出额、净流入额、净占比、买量、卖量、净量（手数）的 DataFrame，并在 `attrs` 字典中注入核心统计指标。
+
+### 17.2 多日资金流向与主力 5日 / 20日 净流入 (`capital_flow_history`)
+
+```python
+with Quotes.factory("std", timeout=5) as client:
+    # 回溯近 20 个交易日资金流向
+    hist = client.capital_flow_history("002594", days=20)
+
+    # 5日 / 20日 主力汇总指标
+    print("5日主力净流入:", f"{hist.attrs['main_5d_net'] / 1e8:.3f} 亿元, 占比: {hist.attrs['main_5d_pct']}%")
+    print("20日主力净流入:", f"{hist.attrs['main_20d_net'] / 1e8:.3f} 亿元, 占比: {hist.attrs['main_20d_pct']}%")
+
+    # 逐日明细及滚动累计列
+    cols = ["date", "close", "change_pct", "main_net", "main_5d_net", "main_20d_net"]
+    print(hist[cols].tail())
+```
+
+### 17.3 行业与板块资金流汇总及穿透 (`sector_capital_flow`)
+
+```python
+with Quotes.factory("std", timeout=5) as client:
+    # 行业名称模糊检索（支持通达信行业及申万一级/二级/三级行业，如 "白酒"、"半导体"、"银行"）
+    sector = client.sector_capital_flow("白酒")
+
+    # 板块汇总指标
+    print(f"板块主力净流入: {sector.attrs['main_net'] / 1e8:.3f} 亿元")
+    print(f"板块主力净占比: {sector.attrs['main_net_pct']}%")
+    print(f"资金流入龙头: {sector.attrs['top_inflow_code']}")
+    print(f"主力出逃最多: {sector.attrs['top_outflow_code']}")
+
+    # 成分股主力净买入降序明细
+    print(sector.head())
+
+    # 自定义成分股池统计
+    custom = client.sector_capital_flow(name="自选组合", symbols=["600519", "000858", "002594"])
+```
+
+## 18. 通达信官方综合统计与估值指标 (Statistics)
+
+读取并解析通达信官方报告中的个股综合统计数据（`tdxstat.cfg`），提供市盈率TTM、静态市盈率、股息率、连涨连跌天数以及区间涨跌幅：
+
+```python
+with Quotes.factory("std", timeout=5) as client:
+    # 指定个股（支持单只或列表；不传时返回全市场 8000+ 标的）
+    stats = client.statistics(["600519", "002594", "300750", "000001"])
+    print(stats[["code", "date", "pe_ttm", "pe_static", "dividend_yield", "trend_days", "change_pct", "change_5d", "change_20d", "change_ytd"]])
+```
+
+- `pe_ttm`: 动态市盈率 (TTM)
+- `pe_static`: 静态市盈率
+- `dividend_yield`: 股息率 (%)
+- `trend_days`: 连涨连跌天数（正数代表连涨，负数代表连跌）
+- `change_pct`: 当日涨跌幅 (%)
+- `change_5d`, `change_10d`, `change_20d`, `change_60d`, `change_ytd`: 5日、10日、20日、60日、年初至今区间涨跌幅 (%)
+
+## 19. 通达信官方盘后资金流数据包 (Money Flow)
+
+```python
+with Quotes.factory("std", timeout=5) as client:
+    # 读取官方盘后资金流及板块归属报告（tdxstat2.cfg）
+    report = client.money_flow()
+```
+
+## 20. 新股申购日历与发行信息 (IPO / XGSG)
+
+从通达信官方报告数据包（`xgsg.cfg`）获取全市场近期拟上市及已申购新股（包含沪深主板/科创板/创业板、北交所）的发行日历、发行价格与市场归属：
+
+```python
+with Quotes.factory("std", timeout=5) as client:
+    # 1. 获取全市场近期新股申购清单（别名 client.ipo() / client.new_stocks()）
+    ipos = client.xgsg()
+    print(ipos[["market", "code", "name", "date", "issue_price"]].head())
+
+    # 2. 查询指定新股发行信息（支持代码过滤）
+    single = client.xgsg("001246")
+```
+
+- `market`: 所属市场（`sh` 沪市、`sz` 深市、`bj` 北交所）
+- `code`: 股票代码
+- `name`: 拟上市新股名称
+- `date`: 网上申购日期（YYYYMMDD）
+- `issue_price`: 发行价格（元）
+- `raw_fields`: 官方原始完整字段（保留总发行量、网上发行量、发行市盈率、中签率、申购代码等）

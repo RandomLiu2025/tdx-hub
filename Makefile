@@ -58,7 +58,7 @@ build: ## Build the source distribution and wheel with uv
 pack: ## Package project source code as a tar.gz snapshot
 	rm -rf build/pack
 	mkdir -p $(PACK_STAGING)
-	cp -R docs tdxhub sample scripts .github $(PACK_STAGING)/
+	cp -R tdxhub tests docs sample scripts .github $(PACK_STAGING)/
 	cp -R .pre-commit-config.yaml .drone.yml .coveragerc mkdocs.yml LICENSE Dockerfile .gitignore pyproject.toml README.md AUTHORS.rst requirements.txt tox.ini Makefile $(PACK_STAGING)/
 	find $(PACK_STAGING) -type d -name __pycache__ -prune -exec rm -rf {} +
 	find $(PACK_STAGING) -type d -name '*.egg-info' -prune -exec rm -rf {} +

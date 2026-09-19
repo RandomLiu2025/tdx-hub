@@ -60,6 +60,8 @@ def classify_security(market: Hashable, code: object, name: object = "") -> str:
     normalized_name = "" if name is None else str(name).upper()
 
     if normalized_market == 2:
+        if normalized_code.startswith("89"):
+            return "index"
         return "a_stock"
 
     if normalized_market == 0:

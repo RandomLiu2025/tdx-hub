@@ -132,14 +132,21 @@ class MarketDataService:
             length=length,
         )
 
-    def statistics(self) -> Any:
+    def statistics(self, *, codes: str | None = None) -> Any:
+        if codes:
+            return self.standard_quotes.statistics(self._codes(codes))
         return self.standard_quotes.statistics()
 
     def money_flow(self) -> Any:
         return self.standard_quotes.money_flow()
 
-    def xgsg(self) -> Any:
+    def xgsg(self, code: str | None = None) -> Any:
+        if code is not None:
+            return self.standard_quotes.xgsg(symbol=code)
         return self.standard_quotes.xgsg()
+
+    ipo = xgsg
+
 
     def index_kline(self, *, category: int, code: str, start: int, count: int) -> Any:
         return self.standard_quotes.index(
@@ -214,6 +221,33 @@ class MarketDataService:
         return self.standard_quotes.transactions_all(
             symbol=self._required_text(code, "code"),
             date=self._required_text(date, "date"),
+        )
+
+    def capital_flow(self, *, code: str, date: str | None = None) -> Any:
+        clean_date = str(date).strip() if date is not None and str(date).strip() else None
+        return self.standard_quotes.capital_flow(
+            symbol=self._required_text(code, "code"),
+            date=clean_date,
+        )
+
+    def capital_flow_history(self, *, code: str, days: int = 20) -> Any:
+        return self.standard_quotes.capital_flow_history(
+            symbol=self._required_text(code, "code"),
+            days=days,
+        )
+
+    def sector_capital_flow(
+        self,
+        *,
+        name: str | None = None,
+        codes: str | None = None,
+        date: str | None = None,
+    ) -> Any:
+        clean_date = str(date).strip() if date is not None and str(date).strip() else None
+        return self.standard_quotes.sector_capital_flow(
+            name=name or "",
+            symbols=self._codes(codes) if codes else None,
+            date=clean_date,
         )
 
     def ext_markets(self) -> Any:

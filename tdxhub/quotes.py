@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager, suppress
 from copy import deepcopy
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from io import BytesIO
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
@@ -14,7 +15,6 @@ import pandas
 import pandas as pd
 from tdxpy.exceptions import TdxConnectionError, TdxFunctionCallError, ValidationException
 from tdxpy.exhq import TdxExHq_API
-from tdxpy.hq import TdxHq_API
 from tenacity import retry, retry_if_exception_type, retry_if_result, stop_after_attempt, wait_random
 from tqdm import tqdm
 
@@ -27,10 +27,11 @@ from tdxhub.failover import EndpointPool, FailoverClient, FailoverClientPool
 from tdxhub.logger import logger
 from tdxhub.security import filter_security_directory, normalize_security_type
 from tdxhub.server import check_server
-from tdxhub.utils import get_config_path, get_frequency, get_stock_markets, to_data
+from tdxhub.tdxpy_compat import TdxHq_API, normalize_security_quotes
+from tdxhub.utils import _normalize_symbol, get_config_path, get_frequency, get_stock_markets, to_data
 
 _QUOTE_METADATA_CACHE = PersistentDataFrameCache()
-_QUOTE_METADATA_CACHE_VERSION = 1
+_QUOTE_METADATA_CACHE_VERSION = 2
 
 
 def _quote_metadata_cache_directory() -> Path:
@@ -283,6 +284,44 @@ class StdQuotes(BaseQuotes):
             raise TdxhubValidationException(f'证券代码错误: {symbol!r}') from exc
         return int(market), code
 
+    @staticmethod
+    def _index_code_market(symbol, market=None):
+        """Return the numeric market and bare code for index requests."""
+        if not isinstance(symbol, str):
+            raise TdxhubValidationException(f'证券代码错误: {symbol!r}')
+        try:
+            prefix, bare_code = _normalize_symbol(symbol)
+        except (TypeError, ValueError) as exc:
+            raise TdxhubValidationException(f'证券代码错误: {symbol!r}') from exc
+
+        if market is not None:
+            if isinstance(market, str):
+                market_key = market.strip().lower()
+                market_map = {'sz': MARKET_SZ, 'sh': MARKET_SH, 'bj': MARKET_BJ}
+                if market_key in market_map:
+                    return market_map[market_key], bare_code
+                if market_key.isdigit() and int(market_key) in {MARKET_SZ, MARKET_SH, MARKET_BJ}:
+                    return int(market_key), bare_code
+                raise TdxhubValidationException(f'不支持的证券市场: {market!r}')
+            if isinstance(market, int) and market in {MARKET_SZ, MARKET_SH, MARKET_BJ}:
+                return market, bare_code
+            raise TdxhubValidationException(f'不支持的证券市场: {market!r}')
+
+        if prefix is not None:
+            prefix_map = {'SH': MARKET_SH, 'SZ': MARKET_SZ, 'BJ': MARKET_BJ}
+            if prefix.upper() in prefix_map:
+                return prefix_map[prefix.upper()], bare_code
+            raise TdxhubValidationException(f'不支持的证券市场: {prefix!r}')
+
+        if bare_code.startswith(('89', '899')):
+            return MARKET_BJ, bare_code
+        if bare_code.startswith(('00', '88', '99')):
+            return MARKET_SH, bare_code
+        if bare_code.startswith('39'):
+            return MARKET_SZ, bare_code
+
+        return MARKET_SZ, bare_code
+
     def __init__(
         self,
         server=None,
@@ -357,6 +396,7 @@ class StdQuotes(BaseQuotes):
             )
 
         self._stock_info_client_pool = FailoverClientPool(self.client, max_size=4)
+        self._capital_flow_cache = {}
         logger.debug(f'server: {self.server}')
 
     def traffic(self):
@@ -381,7 +421,7 @@ class StdQuotes(BaseQuotes):
 
         try:
             symbol = get_stock_markets(symbol)
-            result = self.client.get_security_quotes(symbol)
+            result = normalize_security_quotes(self.client.get_security_quotes(symbol))
         except ValidationException:
             return to_data(None)
 
@@ -753,23 +793,91 @@ class StdQuotes(BaseQuotes):
         result = decode_call_auction(payload, trade_date=trade_date)
         return to_data(result, symbol=code, client=self, **kwargs)
 
-    def statistics(self):
-        """Return verified per-security statistics from the official report archive."""
+    def statistics(self, symbols=None):
+        """获取通达信官方综合统计数据（tdxstat.cfg）.
+
+        包含市盈率TTM (pe_ttm)、静态市盈 (pe_static)、股息率 (dividend_yield)、
+        涨跌幅 (change_pct)、连涨连跌天数 (trend_days)、以及区间涨跌幅
+        (change_5d, change_10d, change_20d, change_60d, change_ytd 等).
+
+        :param symbols: 可选，单个股票代码或代码列表（如 "600519"、"sh600519"、["002594", "600519"]），None 返回全市场
+        :return: pd.DataFrame 包含全市场或指定个股统计指标
+        """
         from tdxhub.official import parse_tdxstat
 
-        return parse_tdxstat(self._get_zhb_file('tdxstat.cfg'))
+        df = parse_tdxstat(self._get_zhb_file('tdxstat.cfg'))
+        if symbols is None:
+            return df
 
-    def money_flow(self):
-        """Return money-flow and block membership from the official report archive."""
-        from tdxhub.official import parse_tdxstat2
+        if isinstance(symbols, str):
+            symbols_list = [symbols]
+        elif isinstance(symbols, (list, tuple, set)):
+            symbols_list = list(symbols)
+        else:
+            symbols_list = [str(symbols)]
 
-        return parse_tdxstat2(self._get_zhb_file('tdxstat2.cfg'))
+        clean_codes = set()
+        for s in symbols_list:
+            if isinstance(s, str):
+                s_strip = s.strip().lower()
+                for prefix in ("sh", "sz", "bj"):
+                    if s_strip.startswith(prefix):
+                        s_strip = s_strip[len(prefix):]
+                        break
+                clean_codes.add(s_strip)
 
-    def xgsg(self):
-        """Return new-share subscriptions from the official report archive."""
+        return df[df["code"].isin(clean_codes)].reset_index(drop=True)
+
+    def money_flow(
+        self,
+        symbol=None,
+        date=None,
+        days=None,
+        thresholds=(40_000.0, 200_000.0, 1_000_000.0),
+        **kwargs,
+    ):
+        """获取资金流向数据.
+
+        - 当 symbol 为 None 时：返回官方报告包中的市场资金流与板块归属（tdxstat2.cfg）
+        - 当指定 symbol 且 days is not None 时：获取该标的近 N 日历史资金流向及 5日/20日主力累计净流入
+        - 当指定 symbol 时：基于逐笔分笔（Tick）计算该标的的超大单、大单、中单、小单及主力/散户资金流向
+        """
+        if symbol is None:
+            from tdxhub.official import parse_tdxstat2
+
+            return parse_tdxstat2(self._get_zhb_file('tdxstat2.cfg'))
+
+        if days is not None:
+            return self.capital_flow_history(
+                symbol=symbol, days=days, thresholds=thresholds, **kwargs
+            )
+
+        return self.capital_flow(symbol=symbol, date=date, thresholds=thresholds, **kwargs)
+
+    def xgsg(self, symbol=None):
+        """获取通达信官方新股申购日历及配置（xgsg.cfg / IPO）.
+
+        包含近期拟上市新股名称、证券代码、申购日期、发行价格及所属市场（沪/深/北）。
+
+        :param symbol: 可选，按股票代码过滤（如 "001246" 或 "sz001246"），None 返回近期全部新股
+        :return: pd.DataFrame
+        """
         from tdxhub.official import parse_xgsg
 
-        return parse_xgsg(self._get_zhb_file('xgsg.cfg'))
+        df = parse_xgsg(self._get_zhb_file('xgsg.cfg'))
+        if symbol is None:
+            return df
+
+        clean_code = str(symbol).strip().lower()
+        for prefix in ("sh", "sz", "bj"):
+            if clean_code.startswith(prefix):
+                clean_code = clean_code[len(prefix):]
+                break
+        return df[df["code"] == clean_code].reset_index(drop=True)
+
+    ipo = xgsg
+    new_stocks = xgsg
+
 
     def stock_all(self, security_type=None):
         """Return the combined Shenzhen, Shanghai and Beijing security directories."""
@@ -791,12 +899,20 @@ class StdQuotes(BaseQuotes):
         """
 
         frequency = get_frequency(frequency)
-        offset = (offset, 800)[offset > 800]
+        options = dict(kwargs)
+        market_arg = options.pop('market', None)
+        try:
+            offset = min(int(offset), 800)
+            start = int(start)
+        except (TypeError, ValueError) as exc:
+            raise TdxhubValidationException('start 和 offset 必须是整数') from exc
+        if start < 0 or offset <= 0:
+            raise TdxhubValidationException('start 必须大于等于 0，offset 必须大于 0')
 
-        market = (MARKET_SZ, MARKET_SH)[symbol[:2] in ['00', '88', '99']]
-        result = self.client.get_index_bars(int(frequency), int(market), str(symbol), int(start), int(offset))
+        market, code = self._index_code_market(symbol, market=market_arg)
+        result = self.client.get_index_bars(int(frequency), int(market), str(code), int(start), int(offset))
 
-        return to_data(result, symbol=symbol, client=self, **kwargs)
+        return to_data(result, symbol=code, client=self, **options)
 
     @staticmethod
     def _parse_since(since):
@@ -935,7 +1051,7 @@ class StdQuotes(BaseQuotes):
             800,
             since=since,
         )
-        _, code = self._code_market(symbol)
+        _, code = self._index_code_market(symbol, market=kwargs.get("market"))
         return self._adjust_collected(result, code, adjust, kwargs.get("xdxr"))
 
     def minute(self, symbol=None, **kwargs):
@@ -1030,6 +1146,466 @@ class StdQuotes(BaseQuotes):
             ),
             2000,
         )
+
+    def capital_flow(
+        self,
+        symbol="",
+        date=None,
+        thresholds=(40_000.0, 200_000.0, 1_000_000.0),
+        **kwargs,
+    ):
+        """计算基于逐笔成交明细（Tick）的资金流向指标.
+
+        :param symbol:      股票代码（支持如 "600519"、"sh600519"）
+        :param date:        查询日期（None 表示当日实时；历史日期形如 "20260910" 或 "2026-09-10"）
+        :param thresholds:  单笔成交金额划分阈值（元），默认 (小单上限 4万, 中单上限 20万, 大单上限 100万)
+        :return: 包含超大单、大单、中单、小单及主力/散户汇总统计的 pd.DataFrame
+        """
+        if not symbol or (isinstance(symbol, str) and not symbol.strip()):
+            raise TdxhubValidationException("symbol 不能为空")
+
+        try:
+            today_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+        except Exception:
+            today_str = datetime.now().strftime("%Y%m%d")
+
+        if date is None:
+            date_clean = today_str
+            trades = self.transaction_all(symbol=symbol, **kwargs)
+        else:
+            date_clean = str(date).replace("-", "").replace(".", "").strip()
+            cache_key = (str(symbol), date_clean, tuple(thresholds))
+            if (
+                date_clean < today_str
+                and hasattr(self, "_capital_flow_cache")
+                and cache_key in self._capital_flow_cache
+            ):
+                return self._capital_flow_cache[cache_key].copy()
+
+            if date_clean == today_str:
+                trades = self.transaction_all(symbol=symbol, **kwargs)
+                if trades is None or trades.empty:
+                    trades = self.transactions_all(symbol=symbol, date=date_clean, **kwargs)
+            else:
+                trades = self.transactions_all(symbol=symbol, date=date_clean, **kwargs)
+
+        tiers = ["超大单", "大单", "中单", "小单"]
+        columns = [
+            "buy_amount",
+            "sell_amount",
+            "net_amount",
+            "net_pct",
+            "buy_volume",
+            "sell_volume",
+            "net_volume",
+        ]
+
+        if trades is None or trades.empty:
+            empty_df = pd.DataFrame(columns=columns, index=tiers + ["主力(超大+大单)", "散户(中+小单)", "合计"])
+            empty_df.index.name = "level"
+            empty_df.attrs = {
+                "symbol": symbol,
+                "date": date,
+                "main_net": 0.0,
+                "main_net_pct": 0.0,
+                "retail_net": 0.0,
+                "retail_net_pct": 0.0,
+                "total_turnover": 0.0,
+                "total_volume": 0.0,
+                "trade_count": 0,
+            }
+            return empty_df
+
+        trades = trades.copy()
+        vol_col = "volume" if "volume" in trades.columns else "vol"
+        trades["amount_yuan"] = trades["price"] * trades[vol_col] * 100.0
+
+        t_small, t_medium, t_large = thresholds
+        bins = [-1.0, float(t_small), float(t_medium), float(t_large), float("inf")]
+        labels = ["小单", "中单", "大单", "超大单"]
+        trades["level"] = pd.cut(trades["amount_yuan"], bins=bins, labels=labels)
+
+        buy_trades = trades[trades["buyorsell"] == 0]
+        sell_trades = trades[trades["buyorsell"] == 1]
+
+        buy_amt = buy_trades.groupby("level", observed=False)["amount_yuan"].sum()
+        sell_amt = sell_trades.groupby("level", observed=False)["amount_yuan"].sum()
+        buy_vol = buy_trades.groupby("level", observed=False)[vol_col].sum()
+        sell_vol = sell_trades.groupby("level", observed=False)[vol_col].sum()
+
+        total_amount = float(trades["amount_yuan"].sum())
+        total_vol = float(trades[vol_col].sum())
+
+        rows = []
+        for t in tiers:
+            b_a = float(buy_amt.get(t, 0.0))
+            s_a = float(sell_amt.get(t, 0.0))
+            n_a = b_a - s_a
+            pct = round(n_a / total_amount * 100.0, 2) if total_amount > 0 else 0.0
+            b_v = float(buy_vol.get(t, 0.0))
+            s_v = float(sell_vol.get(t, 0.0))
+            n_v = b_v - s_v
+            rows.append({
+                "level": t,
+                "buy_amount": b_a,
+                "sell_amount": s_a,
+                "net_amount": n_a,
+                "net_pct": pct,
+                "buy_volume": b_v,
+                "sell_volume": s_v,
+                "net_volume": n_v,
+            })
+
+        tier_df = pd.DataFrame(rows).set_index("level")
+
+        main_buy = float(tier_df.loc[["超大单", "大单"], "buy_amount"].sum())
+        main_sell = float(tier_df.loc[["超大单", "大单"], "sell_amount"].sum())
+        main_net = main_buy - main_sell
+        main_pct = round(main_net / total_amount * 100.0, 2) if total_amount > 0 else 0.0
+        main_b_v = float(tier_df.loc[["超大单", "大单"], "buy_volume"].sum())
+        main_s_v = float(tier_df.loc[["超大单", "大单"], "sell_volume"].sum())
+        main_n_v = main_b_v - main_s_v
+
+        retail_buy = float(tier_df.loc[["中单", "小单"], "buy_amount"].sum())
+        retail_sell = float(tier_df.loc[["中单", "小单"], "sell_amount"].sum())
+        retail_net = retail_buy - retail_sell
+        retail_pct = round(retail_net / total_amount * 100.0, 2) if total_amount > 0 else 0.0
+        retail_b_v = float(tier_df.loc[["中单", "小单"], "buy_volume"].sum())
+        retail_s_v = float(tier_df.loc[["中单", "小单"], "sell_volume"].sum())
+        retail_n_v = retail_b_v - retail_s_v
+
+        tot_buy = float(tier_df["buy_amount"].sum())
+        tot_sell = float(tier_df["sell_amount"].sum())
+        tot_net = tot_buy - tot_sell
+        tot_pct = round(tot_net / total_amount * 100.0, 2) if total_amount > 0 else 0.0
+        tot_b_v = float(tier_df["buy_volume"].sum())
+        tot_s_v = float(tier_df["sell_volume"].sum())
+        tot_n_v = tot_b_v - tot_s_v
+
+        summary = pd.DataFrame([
+            {
+                "buy_amount": main_buy,
+                "sell_amount": main_sell,
+                "net_amount": main_net,
+                "net_pct": main_pct,
+                "buy_volume": main_b_v,
+                "sell_volume": main_s_v,
+                "net_volume": main_n_v,
+            },
+            {
+                "buy_amount": retail_buy,
+                "sell_amount": retail_sell,
+                "net_amount": retail_net,
+                "net_pct": retail_pct,
+                "buy_volume": retail_b_v,
+                "sell_volume": retail_s_v,
+                "net_volume": retail_n_v,
+            },
+            {
+                "buy_amount": tot_buy,
+                "sell_amount": tot_sell,
+                "net_amount": tot_net,
+                "net_pct": tot_pct,
+                "buy_volume": tot_b_v,
+                "sell_volume": tot_s_v,
+                "net_volume": tot_n_v,
+            },
+        ], index=["主力(超大+大单)", "散户(中+小单)", "合计"])
+        summary.index.name = "level"
+
+        result = pd.concat([tier_df, summary])
+        result.attrs = {
+            "symbol": symbol,
+            "date": date,
+            "main_net": main_net,
+            "main_net_pct": main_pct,
+            "retail_net": retail_net,
+            "retail_net_pct": retail_pct,
+            "total_turnover": total_amount,
+            "total_volume": total_vol,
+            "trade_count": len(trades),
+        }
+        if date is not None and date_clean < today_str and hasattr(self, "_capital_flow_cache"):
+            self._capital_flow_cache[cache_key] = result.copy()
+        return result
+
+    def capital_flow_history(
+        self,
+        symbol="",
+        days=20,
+        thresholds=(40_000.0, 200_000.0, 1_000_000.0),
+        **kwargs,
+    ):
+        """获取个股近 N 个交易日的逐日资金流向明细，并计算 5日/20日主力累计净流入/出.
+
+        :param symbol:      股票代码（支持如 "600519"、"002594"、"sh600519"）
+        :param days:        回溯交易日天数（默认 20，支持 5、10、20 等任意正整数）
+        :param thresholds:  单笔成交金额划分阈值（元），默认 (4万, 20万, 100万)
+        :return: pd.DataFrame 包含逐日主力/散户流向及 5日/20日滚动累计净流入，并在 attrs 注入 5日/20日汇总数据
+        """
+        if not symbol or (isinstance(symbol, str) and not symbol.strip()):
+            raise TdxhubValidationException("symbol 不能为空")
+
+        days = max(int(days), 1)
+        bars = self.bars(symbol, frequency=9, offset=days + 5, **kwargs)
+        columns = [
+            "date",
+            "close",
+            "change_pct",
+            "total_amount",
+            "main_net",
+            "main_pct",
+            "super_net",
+            "large_net",
+            "medium_net",
+            "small_net",
+            "retail_net",
+            "retail_pct",
+            "main_5d_net",
+            "main_5d_pct",
+            "main_20d_net",
+            "main_20d_pct",
+        ]
+
+        if bars is None or bars.empty:
+            empty_df = pd.DataFrame(columns=columns)
+            empty_df.attrs = {
+                "symbol": symbol,
+                "days": 0,
+                "main_5d_net": 0.0,
+                "main_5d_pct": 0.0,
+                "main_20d_net": 0.0,
+                "main_20d_pct": 0.0,
+                "retail_5d_net": 0.0,
+                "retail_20d_net": 0.0,
+                "total_5d_amount": 0.0,
+                "total_20d_amount": 0.0,
+            }
+            return empty_df
+
+        bars = bars.copy()
+        date_series = bars["datetime"] if "datetime" in bars.columns else bars["date"]
+        bars["date_str"] = [str(d)[:10].replace("-", "").replace(".", "") for d in date_series]
+        bars["date_fmt"] = [str(d)[:10] for d in date_series]
+
+        if "close" in bars.columns:
+            bars["change_pct"] = (bars["close"].pct_change() * 100.0).round(2).fillna(0.0)
+        else:
+            bars["change_pct"] = 0.0
+
+        target_bars = bars.iloc[-days:].copy()
+
+        records = []
+        for _, row in target_bars.iterrows():
+            d_clean = row["date_str"]
+            d_fmt = row["date_fmt"]
+            close_val = float(row.get("close", 0.0))
+            chg_val = float(row.get("change_pct", 0.0))
+
+            flow = self.capital_flow(
+                symbol=symbol, date=d_clean, thresholds=thresholds, **kwargs
+            )
+
+            main_net = float(flow.attrs.get("main_net", 0.0))
+            main_pct = float(flow.attrs.get("main_net_pct", 0.0))
+            retail_net = float(flow.attrs.get("retail_net", 0.0))
+            retail_pct = float(flow.attrs.get("retail_net_pct", 0.0))
+            total_amt = float(flow.attrs.get("total_turnover", 0.0))
+
+            super_net = float(flow.loc["超大单", "net_amount"]) if "超大单" in flow.index else 0.0
+            large_net = float(flow.loc["大单", "net_amount"]) if "大单" in flow.index else 0.0
+            medium_net = float(flow.loc["中单", "net_amount"]) if "中单" in flow.index else 0.0
+            small_net = float(flow.loc["小单", "net_amount"]) if "小单" in flow.index else 0.0
+
+            records.append({
+                "date": d_fmt,
+                "close": close_val,
+                "change_pct": chg_val,
+                "total_amount": total_amt,
+                "main_net": main_net,
+                "main_pct": main_pct,
+                "super_net": super_net,
+                "large_net": large_net,
+                "medium_net": medium_net,
+                "small_net": small_net,
+                "retail_net": retail_net,
+                "retail_pct": retail_pct,
+            })
+
+        df = pd.DataFrame(records)
+        if df.empty:
+            return pd.DataFrame(columns=columns)
+
+        df["main_5d_net"] = df["main_net"].rolling(5, min_periods=1).sum()
+        roll_5d_amt = df["total_amount"].rolling(5, min_periods=1).sum()
+        df["main_5d_pct"] = (df["main_5d_net"] / roll_5d_amt * 100.0).round(2).fillna(0.0)
+
+        df["main_20d_net"] = df["main_net"].rolling(20, min_periods=1).sum()
+        roll_20d_amt = df["total_amount"].rolling(20, min_periods=1).sum()
+        df["main_20d_pct"] = (df["main_20d_net"] / roll_20d_amt * 100.0).round(2).fillna(0.0)
+
+        last_5 = df.iloc[-5:] if len(df) >= 5 else df
+        last_20 = df.iloc[-20:] if len(df) >= 20 else df
+
+        main_5d_net = float(last_5["main_net"].sum())
+        amt_5d = float(last_5["total_amount"].sum())
+        main_5d_pct = round(main_5d_net / amt_5d * 100.0, 2) if amt_5d > 0 else 0.0
+
+        main_20d_net = float(last_20["main_net"].sum())
+        amt_20d = float(last_20["total_amount"].sum())
+        main_20d_pct = round(main_20d_net / amt_20d * 100.0, 2) if amt_20d > 0 else 0.0
+
+        retail_5d_net = float(last_5["retail_net"].sum())
+        retail_20d_net = float(last_20["retail_net"].sum())
+
+        df.attrs = {
+            "symbol": symbol,
+            "days": len(df),
+            "main_5d_net": main_5d_net,
+            "main_5d_pct": main_5d_pct,
+            "main_20d_net": main_20d_net,
+            "main_20d_pct": main_20d_pct,
+            "retail_5d_net": retail_5d_net,
+            "retail_20d_net": retail_20d_net,
+            "total_5d_amount": amt_5d,
+            "total_20d_amount": amt_20d,
+        }
+        return df
+
+    def sector_capital_flow(
+        self,
+        name="",
+        symbols=None,
+        date=None,
+        thresholds=(40_000.0, 200_000.0, 1_000_000.0),
+        **kwargs,
+    ):
+        """获取指定行业或板块的主力资金流向汇总与成分股明细.
+
+        :param name:        板块/行业名称（支持通达信行业如 "白酒"、"银行"，或申万一级行业如 "食品饮料"、"电子"）
+        :param symbols:     可选，自定义成分股代码列表。若提供则优先使用该列表
+        :param date:        查询日期（None 表示当日实时盘中；历史日期形如 "20260914"）
+        :param thresholds:  单笔成交金额划分阈值（元），默认 (4万, 20万, 100万)
+        :return: pd.DataFrame 包含成分股逐笔资金流向明细（按主力净额排序），并在 attrs 中提供板块汇总指标
+        """
+        if not symbols and (not name or not isinstance(name, str) or not name.strip()):
+            raise TdxhubValidationException("name 或 symbols 至少需要提供一个")
+
+        if symbols is not None:
+            if isinstance(symbols, str):
+                target_codes = [s.strip() for s in symbols.split(",") if s.strip()]
+            else:
+                target_codes = list(symbols)
+            sector_name = name or "custom"
+        else:
+            sector_name = name.strip()
+            ind_df = self.stock_industries()
+            industry_cols = [
+                c
+                for c in (
+                    "tdx_industry_name",
+                    "sw_industry_name",
+                    "sw_level1_name",
+                    "sw_level2_name",
+                    "sw_level3_name",
+                )
+                if c in ind_df.columns
+            ]
+            match = pd.Series(False, index=ind_df.index)
+            for c in industry_cols:
+                match = match | (ind_df[c] == sector_name)
+            matched_df = ind_df[match]
+            if matched_df.empty:
+                for c in industry_cols:
+                    match = match | ind_df[c].fillna("").astype(str).str.contains(sector_name)
+                matched_df = ind_df[match]
+
+            if matched_df.empty:
+                raise TdxhubValidationException(f"未找到板块或行业: {sector_name!r}")
+
+            target_codes = matched_df["code"].tolist()
+
+        records = []
+        for code in target_codes:
+            try:
+                flow = self.capital_flow(
+                    symbol=code, date=date, thresholds=thresholds, **kwargs
+                )
+                main_net = float(flow.attrs.get("main_net", 0.0))
+                main_pct = float(flow.attrs.get("main_net_pct", 0.0))
+                retail_net = float(flow.attrs.get("retail_net", 0.0))
+                turnover = float(flow.attrs.get("total_turnover", 0.0))
+                super_net = (
+                    float(flow.loc["超大单", "net_amount"]) if "超大单" in flow.index else 0.0
+                )
+                large_net = (
+                    float(flow.loc["大单", "net_amount"]) if "大单" in flow.index else 0.0
+                )
+
+                records.append({
+                    "code": str(code),
+                    "main_net": main_net,
+                    "main_pct": main_pct,
+                    "retail_net": retail_net,
+                    "super_net": super_net,
+                    "large_net": large_net,
+                    "total_amount": turnover,
+                })
+            except Exception:
+                continue
+
+        columns = [
+            "code",
+            "main_net",
+            "main_pct",
+            "retail_net",
+            "super_net",
+            "large_net",
+            "total_amount",
+        ]
+        if not records:
+            empty_df = pd.DataFrame(columns=columns)
+            empty_df.attrs = {
+                "sector_name": sector_name,
+                "date": date,
+                "stock_count": 0,
+                "main_net": 0.0,
+                "main_net_pct": 0.0,
+                "retail_net": 0.0,
+                "total_turnover": 0.0,
+            }
+            return empty_df
+
+        df = pd.DataFrame(records).sort_values("main_net", ascending=False).reset_index(drop=True)
+
+        tot_main_net = float(df["main_net"].sum())
+        tot_retail_net = float(df["retail_net"].sum())
+        tot_super_net = float(df["super_net"].sum())
+        tot_large_net = float(df["large_net"].sum())
+        tot_turnover = float(df["total_amount"].sum())
+        tot_main_pct = (
+            round(tot_main_net / tot_turnover * 100.0, 2) if tot_turnover > 0 else 0.0
+        )
+
+        top_inflow = str(df.iloc[0]["code"]) if not df.empty else None
+        top_outflow = str(df.iloc[-1]["code"]) if not df.empty else None
+
+        df.attrs = {
+            "sector_name": sector_name,
+            "date": date,
+            "stock_count": len(df),
+            "main_net": tot_main_net,
+            "main_net_pct": tot_main_pct,
+            "retail_net": tot_retail_net,
+            "super_net": tot_super_net,
+            "large_net": tot_large_net,
+            "total_turnover": tot_turnover,
+            "top_inflow_code": top_inflow,
+            "top_outflow_code": top_outflow,
+        }
+        return df
+
+    block_capital_flow = sector_capital_flow
 
     def F10C(self, symbol=''):  # noqa
         """
@@ -1232,13 +1808,7 @@ class StdQuotes(BaseQuotes):
         :param offset:      每次获取条数
         :return: pd.dataFrame or None
         """
-        frequency = get_frequency(frequency)
-
-        offset = (offset, 800)[offset > 800]
-        market = (MARKET_SZ, MARKET_SH)[symbol[:2] in ['00', '88', '99']]
-        result = self.client.get_index_bars(int(frequency), int(market), str(symbol), int(start), int(offset))
-
-        return to_data(result, symbol=symbol, client=self, **kwargs)
+        return self.index_bars(symbol=symbol, frequency=frequency, start=start, offset=offset, **kwargs)
 
     def block(self, tofile='block.dat', **kwargs):
         """

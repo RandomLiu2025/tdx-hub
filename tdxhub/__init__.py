@@ -5,5 +5,5 @@ from tdxhub.consts import HQ_HOSTS
 from tdxhub.server import server
 from tdxhub.utils import get_config_path
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 __author__ = 'bopo.wang <ibopo@126.com>'

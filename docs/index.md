@@ -37,3 +37,4 @@ pip install -U tdxhub-sdk
 ## 设计文档
 
 - [Go tdx 能力迁移到 tdxhub](design/202609101744-port-go-data-capabilities.md)
+- [ETF 与指数行情准确性修复](design/202609132344-etf-index-accuracy-fix.md)
