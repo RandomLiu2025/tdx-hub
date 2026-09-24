@@ -4,11 +4,13 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-from fastapi.testclient import TestClient
 
-from tdxhub.http import create_app
-from tdxhub.http.service import MarketDataService
-from tdxhub.quotes import StdQuotes
+pytest.importorskip("fastapi")
+from fastapi.testclient import TestClient  # noqa: E402
+
+from tdxhub.http import create_app  # noqa: E402
+from tdxhub.http.service import MarketDataService  # noqa: E402
+from tdxhub.quotes import StdQuotes  # noqa: E402
 
 
 def http(q):
