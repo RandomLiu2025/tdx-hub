@@ -98,7 +98,9 @@ def test_every_tdx_module_loads_without_external_packages():
         sys.meta_path.remove(guard)
     assert not any(name.split(".")[0].lower() in {"tdx", "tdxpy", "pytdx", "cython"} for name in sys.modules)
 """)
-        prefix = ("uv", "run", "--no-project", "--python", str(python), "python", "-I")
+        # Windows CI pipes default to cp1252, which cannot encode the Chinese CLI help.
+        # -I ignores PYTHONUTF8/PYTHONIOENCODING, so enable UTF-8 explicitly.
+        prefix = ("uv", "run", "--no-project", "--python", str(python), "python", "-I", "-X", "utf8")
         run(*prefix, "-m", "pytest", "-q", str(tests), cwd=work)
         run(*prefix, "-m", "tdxhub", "--help", cwd=work)
     print("Independent wheel installation, protocol tests and CLI smoke passed")
