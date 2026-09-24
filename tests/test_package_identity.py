@@ -23,10 +23,12 @@ def test_distribution_name_is_distinct_from_import_and_cli_names():
     assert "numpy>=1.26,<3" in project["dependencies"]
 
 
-def test_distribution_and_runtime_versions_are_synced():
+def test_distribution_runtime_and_lock_versions_are_synced():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 
-    assert project["version"] == __version__
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = next(package for package in lock["package"] if package["name"] == project["name"])
+    assert project["version"] == __version__ == locked["version"]
 
 
 def test_holiday_javascript_is_declared_as_package_data():

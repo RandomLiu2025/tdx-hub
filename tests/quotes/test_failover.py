@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections import deque
 
 import pytest
-from tdxpy.exceptions import TdxFunctionCallError, ValidationException
 
 from tdxhub.failover import EndpointPool, FailoverClient
+from tdxhub.tdx.errors import TdxFunctionCallError, ValidationException
 
 A = ("127.0.0.1", 7709)
 B = ("127.0.0.2", 7709)

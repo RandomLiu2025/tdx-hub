@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from tdxhub.http.serialization import to_jsonable
 from tdxhub.official import (
     associate_industries,
     parse_hspy,
@@ -141,7 +142,7 @@ def test_parse_xgsg_decodes_gbk_and_preserves_all_fields():
 
     result = parse_xgsg(raw)
 
-    assert result.drop(columns=["raw_fields"]).to_dict("records") == [
+    assert to_jsonable(result.drop(columns=["raw_fields"])) == [
         {
             "market": "sh",
             "code": "732001",
@@ -154,7 +155,7 @@ def test_parse_xgsg_decodes_gbk_and_preserves_all_fields():
             "market": "bj",
             "code": "920001",
             "date": "20260911",
-            "issue_price": 0.0,
+            "issue_price": None,
             "name": "北交新股",
             "source": "xgsg.cfg",
         },
@@ -603,16 +604,19 @@ def test_parse_tdxstat2_and_stock_block_index_handle_missing_numbers():
 
     result = parse_tdxstat2("|".join(fields) + "\n" + "|".join(no_block))
 
-    assert result.iloc[0].drop(labels="raw_fields").to_dict() == {
+    assert to_jsonable(result.iloc[0].drop(labels="raw_fields").to_dict()) == {
         "market": "sz",
         "code": "000001",
         "date": "20260910",
         "block_index": "880301",
-        "amount": 12345.67,
-        "amount_prev": 11000.0,
+        "amount": 123456700.0,
+        "amount_prev": 110000000.0,
         "ipo_price": 1.5,
         "high_52w": 15.2,
-        "low_52w": 0.0,
+        "low_52w": None,
         "source": "tdxstat2.cfg",
     }
     assert stock_block_index(result) == {"000001": "880301"}
+    assert result.iloc[0]["raw_fields"] == fields
+    assert result.attrs["amount_unit"] == "yuan"
+    assert result.attrs["source_amount_unit"] == "ten_thousand_yuan"

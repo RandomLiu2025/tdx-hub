@@ -7,10 +7,9 @@ from pathlib import Path
 from struct import Struct, unpack_from
 
 import pandas as pd
-from tdxpy.reader import TdxExHqDailyBarReader, TdxLCMinBarReader, TdxMinBarReader
 
-from tdxhub.contrib.compat import TdxhubDailyBarReader
 from tdxhub.exceptions import TdxhubValidationException
+from tdxhub.tdx.files import TdxDailyBarReader, TdxExHqDailyBarReader, TdxLCMinBarReader, TdxMinBarReader
 from tdxhub.utils import get_stock_market, to_data
 
 
@@ -142,7 +141,7 @@ class StdReader(ReaderBase):
             options["xdxr"] = gbbq
 
         filepath = self.find_path(normalized, subdir="lday", suffix="day")
-        raw = TdxhubDailyBarReader().get_df(str(filepath)) if filepath else None
+        raw = TdxDailyBarReader().get_df(str(filepath)) if filepath else None
         result = to_data(raw, symbol=normalized, **options)
         if not with_turnover:
             return result

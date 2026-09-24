@@ -13,7 +13,7 @@ PACK_STAGING := build/pack/$(PACK_NAME)
 WHEEL := dist/$(DIST_BASENAME)-py3-none-any.whl
 
 .PHONY: help sync install test test-network test-vipdoc lint lint-all format format-check \
-	lock-check deps-check build pack package-check check clean
+	lock-check deps-check build pack package-check wheel-check check clean
 
 help: ## Show available development commands
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -59,7 +59,7 @@ pack: ## Package project source code as a tar.gz snapshot
 	rm -rf build/pack
 	mkdir -p $(PACK_STAGING)
 	cp -R tdxhub tests docs sample scripts .github $(PACK_STAGING)/
-	cp -R .pre-commit-config.yaml .drone.yml .coveragerc mkdocs.yml LICENSE Dockerfile .gitignore pyproject.toml README.md AUTHORS.rst requirements.txt tox.ini Makefile $(PACK_STAGING)/
+	cp -R .pre-commit-config.yaml .drone.yml .coveragerc mkdocs.yml LICENSE Dockerfile .gitignore pyproject.toml uv.lock README.md AUTHORS.rst requirements.txt tox.ini Makefile $(PACK_STAGING)/
 	find $(PACK_STAGING) -type d -name __pycache__ -prune -exec rm -rf {} +
 	find $(PACK_STAGING) -type d -name '*.egg-info' -prune -exec rm -rf {} +
 	find $(PACK_STAGING) -type f \( -name '*.py[co]' -o -name '.DS_Store' \) -delete
@@ -67,9 +67,12 @@ pack: ## Package project source code as a tar.gz snapshot
 	tar -czf $(PACK_TAR) -C build/pack $(PACK_NAME)
 	@ls -lh $(PACK_TAR)
 
-package-check: build ## Validate metadata and required wheel resources
+package-check: build ## Validate metadata and required wheel/sdist resources
 	$(UVX) twine check $(SDIST) $(WHEEL)
-	$(UV_RUN) python -c "import zipfile; from pathlib import Path; wheel = Path('$(WHEEL)'); archive = zipfile.ZipFile(wheel); names = archive.namelist(); metadata = archive.read(next(name for name in names if name.endswith('.dist-info/METADATA'))).decode(); assert 'tdxhub/utils/holiday.js' in names; assert 'Name: tdxhub-sdk' in metadata; assert 'Version: $(PROJECT_VERSION)' in metadata"
+	$(UV_RUN) python scripts/check_package.py $(WHEEL) $(SDIST)
+
+wheel-check: package-check ## Install wheel in an isolated environment and test outside checkout
+	$(UV_RUN) python scripts/check_wheel_install.py $(WHEEL)
 
 check: lock-check deps-check lint test package-check ## Run all deterministic local quality gates
 

@@ -90,8 +90,8 @@ class _FailoverExtApi:
         self.client = None
 
     def get_instrument_count(self):
-        if self.kwargs["auto_retry"] and self.endpoint == ("127.0.0.1", 7727):
-            from tdxpy.exceptions import TdxFunctionCallError
+        if getattr(self, "heartbeat_runner", None) is not None and self.endpoint == ("127.0.0.1", 7727):
+            from tdxhub.tdx.errors import TdxFunctionCallError
 
             raise TdxFunctionCallError("primary offline")
         return 1
@@ -107,7 +107,7 @@ def test_extended_quote_updates_public_server_after_runtime_switch(monkeypatch):
     monkeypatch.setattr(config, "setup", lambda **kwargs: True)
     monkeypatch.setattr(config, "get", lambda key, default=None: values.get(key, default))
     monkeypatch.setattr(config, "set", lambda key, value: values.__setitem__(key, value))
-    monkeypatch.setattr("tdxhub.quotes.TdxExHq_API", _FailoverExtApi)
+    monkeypatch.setattr("tdxhub.quotes.ExtendedClient", _FailoverExtApi)
 
     quotes = ExtQuotes(
         server=("127.0.0.1", 7727),

@@ -19,8 +19,8 @@ def _bars(*timestamps, tz=None):
             "close": [10.2 + index for index in range(len(timestamps))],
             "high": [10.4 + index for index in range(len(timestamps))],
             "low": [9.8 + index for index in range(len(timestamps))],
-            "vol": [100 + index for index in range(len(timestamps))],
-            "volume": [100 + index for index in range(len(timestamps))],
+            "vol": [10000 + index for index in range(len(timestamps))],
+            "volume": [10000 + index for index in range(len(timestamps))],
             "amount": [100_000.0 + index for index in range(len(timestamps))],
             "datetime": [timestamp.strftime("%Y-%m-%d %H:%M") for timestamp in index],
             "year": index.year,
@@ -40,23 +40,23 @@ def test_build_minute_241_inserts_auction_bar_and_adjusts_0931():
     bars["last"] = [9.9, 10.2]
     bars["order"] = [10, 8]
     original = bars.copy(deep=True)
-    trades = pd.DataFrame([{"time": "09:25", "price": 10.1, "vol": 20, "num": 3}])
+    trades = pd.DataFrame([{"time": "09:25", "price": 10.1, "vol": 20, "num": 3, "buyorsell": 2}])
 
     result = build_minute_241(bars, {date(2026, 9, 10): trades})
 
     auction = result.loc[pd.Timestamp("2026-09-10 09:30", tz=_SHANGHAI)]
     assert auction[["open", "close", "high", "low"]].tolist() == [10.1] * 4
     assert auction[["vol", "volume", "amount", "order", "last"]].tolist() == [
-        20,
-        20,
+        2000,
+        2000,
         20_200.0,
         3,
         9.9,
     ]
     first_minute = result.loc[pd.Timestamp("2026-09-10 09:31", tz=_SHANGHAI)]
     assert first_minute[["vol", "volume", "amount", "order", "last"]].tolist() == [
-        80,
-        80,
+        8000,
+        8000,
         79_800.0,
         7,
         10.1,
@@ -69,44 +69,25 @@ def test_build_minute_241_inserts_auction_bar_and_adjusts_0931():
     pdt.assert_frame_equal(bars, original)
 
 
-def test_build_minute_241_clamps_deductions_and_defaults_missing_trade_num():
+def test_build_minute_241_rejects_inconsistent_auction_without_clamping_source():
     bars = _bars("2026-09-09 09:31")
     bars.loc[:, ["vol", "volume"]] = 5
     bars.loc[:, "amount"] = 100.0
-    trades = pd.DataFrame([{"time": "09:29:59", "price": 12.0, "vol": 8}])
-
+    trades = pd.DataFrame([{"time": "09:25", "price": 10.0, "vol": 8, "buyorsell": 2}])
     result = build_minute_241(bars, {"20260909": trades})
-
-    assert result.loc["2026-09-09 09:30", "order"] == 0
-    adjusted = result.loc["2026-09-09 09:31"]
-    assert adjusted["vol"] == 0
-    assert adjusted["volume"] == 0
-    assert adjusted["amount"] == 0
-    assert adjusted["order"] == 0
-    assert adjusted["last"] == 12.0
+    assert result.iloc[0]["auction_status"] == "inconsistent"
+    assert pd.isna(result.iloc[0]["close"])
+    assert result.iloc[1]["vol"] == 5
+    assert result.iloc[1]["amount"] == 100
+    assert result.iloc[1]["last"] == 0
 
 
-def test_build_minute_241_uses_zero_auction_when_first_trade_is_not_before_0930():
+def test_build_minute_241_does_not_duplicate_existing_0930():
     bars = _bars("2026-09-09 09:30", "2026-09-09 09:31")
-    trades = pd.DataFrame([{"time": "09:30", "price": 12.0, "vol": 8, "num": 2}])
-
+    trades = pd.DataFrame([{"time": "09:25", "price": 10.0, "vol": 8, "buyorsell": 2}])
     result = build_minute_241(bars, {date(2026, 9, 9): trades})
-
-    assert list(result.index.strftime("%H:%M")) == ["09:30", "09:30", "09:31"]
-    inserted = result.iloc[1]
-    assert inserted[["open", "close", "high", "low", "vol", "volume", "amount", "order"]].tolist() == [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    ]
-    assert inserted["last"] == bars.iloc[0]["close"]
-    assert result.iloc[2]["last"] == 0
-    assert result.iloc[2][["vol", "volume", "amount"]].tolist() == [101, 101, 100_001.0]
+    assert list(result.index.strftime("%H:%M")) == ["09:30", "09:31"]
+    pdt.assert_frame_equal(result[bars.columns], bars)
 
 
 def test_build_minute_241_handles_each_date_independently_and_derives_last():
@@ -117,8 +98,8 @@ def test_build_minute_241_handles_each_date_independently_and_derives_last():
         "2026-09-10 09:31",
     )
     trades = {
-        date(2026, 9, 9): pd.DataFrame([{"time": "09:25", "price": 11.0, "vol": 1, "num": 1}]),
-        date(2026, 9, 10): pd.DataFrame([{"time": "09:20", "price": 12.0, "vol": 2, "num": 2}]),
+        date(2026, 9, 9): pd.DataFrame([{"time": "09:25", "price": 11.0, "vol": 1, "num": 1, "buyorsell": 2}]),
+        date(2026, 9, 10): pd.DataFrame([{"time": "09:25", "price": 13.0, "vol": 2, "num": 2, "buyorsell": 2}]),
     }
 
     result = build_minute_241(bars, trades)
@@ -134,7 +115,7 @@ def test_build_minute_241_handles_each_date_independently_and_derives_last():
     assert result.loc["2026-09-09 09:30", "last"] == bars.iloc[0]["close"]
     assert result.loc["2026-09-10 09:30", "last"] == bars.iloc[2]["close"]
     assert result.loc["2026-09-09 09:31", "last"] == 11.0
-    assert result.loc["2026-09-10 09:31", "last"] == 12.0
+    assert result.loc["2026-09-10 09:31", "last"] == 13.0
 
 
 def test_build_minute_241_empty_data_returns_independent_copy():
@@ -159,11 +140,11 @@ def test_std_quotes_minute_241_fetches_current_and_historical_trades(monkeypatch
 
     def transaction_all(**kwargs):
         calls.append(("transaction_all", kwargs))
-        return pd.DataFrame([{"time": "09:25", "price": 12.0, "vol": 2, "num": 1}])
+        return pd.DataFrame([{"time": "09:25", "price": 11.0, "vol": 2, "num": 1, "buyorsell": 2}])
 
     def transactions_all(**kwargs):
         calls.append(("transactions_all", kwargs))
-        return pd.DataFrame([{"time": "09:25", "price": 11.0, "vol": 1}])
+        return pd.DataFrame([{"time": "09:25", "price": 10.0, "vol": 1, "buyorsell": 2}])
 
     class Clock(datetime):
         @classmethod
@@ -183,8 +164,8 @@ def test_std_quotes_minute_241_fetches_current_and_historical_trades(monkeypatch
         ("transactions_all", {"symbol": "600519", "date": "20260910"}),
         ("transaction_all", {"symbol": "600519"}),
     ]
-    assert result.loc["2026-09-10 09:31", "last"] == 11.0
-    assert result.loc["2026-09-11 09:31", "last"] == 12.0
+    assert result.loc["2026-09-10 09:31", "last"] == 10.0
+    assert result.loc["2026-09-11 09:31", "last"] == 11.0
 
 
 def test_std_quotes_minute_241_without_since_returns_only_latest_trade_date(monkeypatch):
@@ -359,3 +340,58 @@ def test_std_quotes_minute_uses_shanghai_trade_date(monkeypatch):
     quotes.minute("300394")
 
     assert calls == [{"symbol": "300394", "date": "20260911"}]
+
+
+def test_auction_skips_indicative_records_and_converts_lots_to_shares():
+    bars = _bars('2026-09-18 09:31', '2026-09-18 09:32')
+    bars.loc[:, ['vol', 'volume']] = 1_911_500
+    bars.loc[:, 'amount'] = 22_137_400.0
+    bars.loc[:, ['open', 'close']] = 11.59
+    bars.loc[:, 'low'] = 11.56
+    bars.loc[:, 'high'] = 11.60
+    trades = pd.DataFrame([
+        {'time': '09:15', 'price': 11.61, 'vol': 0, 'buyorsell': 8},
+        {'time': '09:25', 'price': 11.59, 'vol': 0, 'buyorsell': 8},
+        {'time': '09:25', 'price': 11.59, 'vol': 3739, 'buyorsell': 2},
+        {'time': '09:31', 'price': 11.58, 'vol': 1, 'buyorsell': 0},
+    ])
+    result = build_minute_241(bars, {'20260918': trades})
+    assert result.iloc[0]['close'] == 11.59
+    assert result.iloc[0]['vol'] == 373900
+    assert result.iloc[0]['amount'] == pytest.approx(4_333_501)
+    assert result.iloc[0]['auction_status'] == 'derived'
+    assert result.iloc[1]['vol'] == 1_537_600
+    assert result['vol'].sum() == bars['vol'].sum()
+    assert result['amount'].sum() == pytest.approx(bars['amount'].sum())
+
+
+def test_missing_auction_is_null_not_zero_price_and_leaves_first_minute_unchanged():
+    bars = _bars('2026-09-18 09:31')
+    result = build_minute_241(bars, {})
+    assert result.iloc[0][['open', 'high', 'low', 'close']].isna().all()
+    assert result.iloc[0]['auction_status'] == 'missing'
+    assert result.iloc[0]['vol'] == 0
+    assert result.iloc[1]['vol'] == bars.iloc[0]['vol']
+    assert result.iloc[1]['last'] == 0
+
+
+@pytest.mark.parametrize('field,value', [('amount', float('inf')), ('amount', float('nan')),
+                                        ('vol', float('inf')), ('low', float('nan')),
+                                        ('high', float('inf'))])
+def test_auction_does_not_derive_against_nonfinite_source_bar(field, value):
+    bars = _bars('2026-09-18 09:31')
+    bars[field] = value
+    trades = pd.DataFrame([{'time': '09:25', 'price': 10., 'vol': 1, 'buyorsell': 2}])
+    result = build_minute_241(bars, {'20260918': trades})
+    assert result.iloc[0]['auction_status'] == 'inconsistent'
+    assert pd.isna(result.iloc[0]['close'])
+    assert result.iloc[1]['amount'] == bars.iloc[0]['amount'] or pd.isna(bars.iloc[0]['amount'])
+
+
+def test_auction_overflow_is_inconsistent_and_preserves_source():
+    bars = _bars('2026-09-18 09:31')
+    trades = pd.DataFrame([{'time': '09:25', 'price': 10., 'vol': 1e308, 'buyorsell': 2}])
+    result = build_minute_241(bars, {'20260918': trades})
+    assert result.iloc[0]['auction_status'] == 'inconsistent'
+    assert pd.isna(result.iloc[0]['close'])
+    assert result.iloc[1]['vol'] == bars.iloc[0]['vol']

@@ -1,10 +1,10 @@
 from pathlib import Path
 
 import pandas as pd
-from tdxpy.reader import BlockReader
 
 from tdxhub.consts import TYPE_FLATS, TYPE_GROUP
 from tdxhub.logger import logger
+from tdxhub.tdx.files import BlockReader
 
 
 class BaseParse:

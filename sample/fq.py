@@ -27,7 +27,7 @@ import pandas as pd
 from QUANTAXIS.QAUtil import (QA_util_date_stamp, QA_util_date_str2int,
                               QA_util_get_real_datelist, QA_util_log_info,
                               QA_util_time_stamp, trade_date_sse)
-from pytdx.hq import TdxHq_API
+from tdxhub.tdx.client import StandardClient
 
 
 # from pypinyin import lazy_pinyin
@@ -38,7 +38,7 @@ from pytdx.hq import TdxHq_API
 
 
 def ping(ip):
-    api = TdxHq_API()
+    api = StandardClient()
     __time1 = datetime.datetime.now()
     try:
         with api.connect(ip, 7709):
@@ -74,7 +74,7 @@ def __select_market_code(code):
 
 
 def QA_fetch_get_stock_day(code, start_date, end_date, if_fq='00', level='day', ip=best_ip, port=7709):
-    api = TdxHq_API()
+    api = StandardClient()
     with api.connect(ip, port):
 
         if level in ['day', 'd', 'D', 'DAY', 'Day']:
@@ -246,7 +246,7 @@ def QA_fetch_get_stock_day(code, start_date, end_date, if_fq='00', level='day', 
 
 
 def QA_fetch_get_stock_min(code, start, end, level='1min', ip=best_ip, port=7709):
-    api = TdxHq_API()
+    api = StandardClient()
     type_ = ''
     if str(level) in ['5', '5m', '5min', 'five']:
         level, type_ = 0, '5min'
@@ -275,7 +275,7 @@ def QA_fetch_get_stock_min(code, start, end, level='1min', ip=best_ip, port=7709
 
 def QA_fetch_get_stock_latest(code, ip=best_ip, port=7709):
     code = [code] if isinstance(code, str) else code
-    api = TdxHq_API(multithread=True)
+    api = StandardClient(multithread=True)
     with api.connect(ip, port):
         data = pd.concat([api.to_df(api.get_security_bars(
             9, __select_market_code(item), item, 0, 1)).assign(code=item) for item in code], axis=0)
@@ -288,7 +288,7 @@ def QA_fetch_get_stock_latest(code, ip=best_ip, port=7709):
 
 
 def QA_fetch_get_stock_realtime(code=['000001', '000002'], ip=best_ip, port=7709):
-    api = TdxHq_API()
+    api = StandardClient()
     __data = pd.DataFrame()
     with api.connect(ip, port):
         code = [code] if type(code) is str else code
@@ -301,7 +301,7 @@ def QA_fetch_get_stock_realtime(code=['000001', '000002'], ip=best_ip, port=7709
 
 
 def QA_fetch_get_stock_list(type_='stock', ip=best_ip, port=7709):
-    api = TdxHq_API()
+    api = StandardClient()
     with api.connect(ip, port):
         data = pd.concat(
             [pd.concat([api.to_df(api.get_security_list(j, i * 1000)).assign(sse='sz' if j == 0 else 'sh').set_index(
@@ -343,7 +343,7 @@ def QA_fetch_get_stock_list(type_='stock', ip=best_ip, port=7709):
 
 def QA_fetch_get_index_day(code, start_date, end_date, level='day', ip=best_ip, port=7709):
     '指数日线'
-    api = TdxHq_API()
+    api = StandardClient()
     if level in ['day', 'd', 'D', 'DAY', 'Day']:
         level = 9
     elif level in ['w', 'W', 'Week', 'week']:
@@ -374,7 +374,7 @@ def QA_fetch_get_index_day(code, start_date, end_date, level='day', ip=best_ip, 
 
 def QA_fetch_get_index_min(code, start, end, level='1min', ip=best_ip, port=7709):
     '指数分钟线'
-    api = TdxHq_API()
+    api = StandardClient()
     type_ = ''
     if str(level) in ['5', '5m', '5min', 'five']:
         level, type_ = 0, '5min'
@@ -423,7 +423,7 @@ def __QA_fetch_get_stock_transaction(code, day, retry, api):
 
 def QA_fetch_get_stock_transaction(code, start, end, retry=2, ip=best_ip, port=7709):
     '逐笔成交'
-    api = TdxHq_API()
+    api = StandardClient()
 
     real_start, real_end = QA_util_get_real_datelist(start, end)
     real_id_range = []
@@ -449,7 +449,7 @@ def QA_fetch_get_stock_transaction(code, start, end, retry=2, ip=best_ip, port=7
 
 def QA_fetch_get_stock_xdxr(code, ip=best_ip, port=7709):
     '除权除息'
-    api = TdxHq_API()
+    api = StandardClient()
     market_code = __select_market_code(code)
     with api.connect(ip, port):
         category = {
@@ -471,7 +471,7 @@ def QA_fetch_get_stock_xdxr(code, ip=best_ip, port=7709):
 
 def QA_fetch_get_stock_block(ip=best_ip, port=7709):
     '板块数据'
-    api = TdxHq_API()
+    api = StandardClient()
     with api.connect(ip, port):
 
         data = pd.concat([api.to_df(api.get_and_parse_block_info("block_gn.dat")),
@@ -488,7 +488,7 @@ def QA_fetch_get_stock_block(ip=best_ip, port=7709):
 
 def QA_fetch_get_stock_info(code, ip=best_ip, port=7709):
     '股票财务数据'
-    api = TdxHq_API()
+    api = StandardClient()
     market_code = __select_market_code(code)
     with api.connect(ip, port):
         return api.to_df(api.get_finance_info(market_code, code))

@@ -42,9 +42,8 @@ jobs:
       - name: Check package metadata
         run: uvx twine check dist/*
 
-      - name: Verify wheel package data
-        run: |
-          python -c "import pathlib, zipfile; wheel = next(pathlib.Path('dist').glob('*.whl')); assert 'tdxhub/utils/holiday.js' in zipfile.ZipFile(wheel).namelist()"
+      - name: Verify sources, licenses and dependencies in wheel and sdist
+        run: uv run --no-project python scripts/check_package.py dist/*.whl dist/*.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:

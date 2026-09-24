@@ -1,11 +1,17 @@
 import tempfile
 import zipfile
 from pathlib import Path
-from struct import calcsize
-from struct import unpack
 
 import pandas as pd
-from tdxpy.hq import TdxHq_API
+
+from tdxhub.tdx.client import StandardClient
+from tdxhub.tdx.financial_data import parse_financial_dat, unique_financial_records
+from tdxhub.tdx.financial_integrity import validate_financial_metadata, verify_financial_stream
+from tdxhub.tdx.financial_path import (
+    financial_download_path,
+    validate_financial_filename,
+    write_financial_download,
+)
 
 from ..logger import logger
 from .base import BaseFinancial
@@ -46,14 +52,12 @@ class FinancialList(BaseFinancial):
         :return:
         """
 
-        tmp = tempfile.NamedTemporaryFile(delete=True)
-
-        api = TdxHq_API(**kwargs)
+        api = StandardClient(**kwargs)
         api.need_setup = False
 
         with api.connect(*self.bestip):
             content = api.get_report_file_by_size('tdxfin/gpcw.txt')
-            download_file = open(downdir, 'wb') if downdir else tmp
+            download_file = open(downdir, 'w+b') if downdir else tempfile.NamedTemporaryFile(delete=True)
             download_file.write(content)
             download_file.seek(0)
 
@@ -97,26 +101,36 @@ class Financial(BaseFinancial):
         :return:
         """
 
-        filename = kwargs.get('filename')
-        if not filename:
-            raise ValueError('filename 不能为空')
-        filesize = kwargs.get('filesize') or 0
+        # Low-level callers may supply their own manifest snapshot. Affair's
+        # public downloads always supply both length and MD5.
+        filename = validate_financial_filename(kwargs.get('filename'))
+        if downdir is not None:
+            financial_download_path(downdir, filename)
+        filesize, expected_md5 = validate_financial_metadata(
+            kwargs.get('filesize', 0), kwargs.get('expected_md5'),
+        )
 
         logger.debug(f'{filename}: start download...')
 
-        api = TdxHq_API()
+        api = StandardClient()
         api.need_setup = False
 
         with api.connect(*self.bestip):
             content = api.get_report_file_by_size(f'tdxfin/{filename}', filesize=filesize, reporthook=report_hook)
             if downdir is not None:
-                destination = Path(downdir)
-                destination.mkdir(parents=True, exist_ok=True)
-                download_file = (destination / filename).open('w+b')
+                download_file = write_financial_download(
+                    downdir, filename, content, filesize=filesize, expected_md5=expected_md5,
+                )
             else:
                 download_file = tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=True)
-            download_file.write(content)
-            download_file.seek(0)
+                try:
+                    download_file.write(content)
+                    download_file.flush()
+                    verify_financial_stream(download_file, filename=filename, filesize=filesize, expected_md5=expected_md5)
+                    download_file.seek(0)
+                except BaseException:
+                    download_file.close()
+                    raise
 
             del content
 
@@ -134,12 +148,14 @@ class Financial(BaseFinancial):
         :return:
         """
 
-        header_pack_format = '<hIH3L'
         suffix = Path(download_file.name).suffix.lower()
         try:
             if suffix == '.zip':
                 with zipfile.ZipFile(download_file) as archive:
-                    members = [name for name in archive.namelist() if name.lower().endswith('.dat')]
+                    members = [
+                        item for item in archive.infolist()
+                        if not item.is_dir() and item.filename.lower().endswith('.dat')
+                    ]
                     if len(members) != 1:
                         raise ValueError(f'财务压缩包应包含一个 .dat 文件，实际为 {len(members)} 个')
                     payload = archive.read(members[0])
@@ -151,41 +167,7 @@ class Financial(BaseFinancial):
         finally:
             download_file.close()
 
-        header_size = calcsize(header_pack_format)
-        stock_item_format = '<6scL'
-        stock_item_size = calcsize(stock_item_format)
-        if len(payload) < header_size:
-            raise ValueError('财务数据文件头不完整')
-
-        stock_header = unpack(header_pack_format, payload[:header_size])
-
-        max_count = stock_header[2]
-
-        report_date = stock_header[1]
-        report_size = stock_header[4]
-
-        report_fields_count = int(report_size / 4)
-        report_pack_format = '<{}f'.format(report_fields_count)
-
-        results = []
-
-        for stock_idx in range(0, max_count):
-            item_offset = header_size + stock_idx * stock_item_size
-            si = payload[item_offset:item_offset + stock_item_size]
-            if len(si) != stock_item_size:
-                raise ValueError(f'第 {stock_idx} 条证券索引不完整')
-            stock_item = unpack(stock_item_format, si)
-            code = stock_item[0].decode('ascii', errors='strict').rstrip('\x00')
-            info_offset = stock_item[2]
-            info_size = calcsize(report_pack_format)
-            info_data = payload[info_offset:info_offset + info_size]
-            if len(info_data) != info_size:
-                raise ValueError(f'{code} 的财务记录不完整')
-            cw_info = unpack(report_pack_format, info_data)
-            one_record = (code, report_date) + cw_info
-            results.append(one_record)
-
-        return results
+        return parse_financial_dat(payload)
 
     @staticmethod
     def to_df(data, header='zh'):
@@ -193,13 +175,14 @@ class Financial(BaseFinancial):
         转换数据为 pandas DataFrame 格式
 
         :param data: 要转换的数据
-        :param header: 是否中文表头
+        :param header: 'zh' 为唯一中文表头，'en' 保留 colN / FINVALUE 编号
         :return: DataFrame
         """
 
         if len(data) == 0 or len(data[0]) == 0:
             return pd.DataFrame(data=None)
 
+        data = unique_financial_records(data)
         column = ['code', 'report_date']
 
         for i in range(1, len(data[0]) - 1):
@@ -212,6 +195,8 @@ class Financial(BaseFinancial):
             if len(labels) < len(df.columns):
                 labels.extend(df.columns[len(labels):])
             df.columns = labels[:len(df.columns)]
+            if not df.columns.is_unique:
+                raise ValueError("财务中文表头存在重名，请使用 header='en' 保留 FINVALUE 编号")
 
         logger.debug(df.shape)
 

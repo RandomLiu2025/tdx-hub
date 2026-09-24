@@ -80,6 +80,10 @@ def test_stock_info_merges_sources_calculates_fields_and_restores_input_order(mo
                 "vol": 500.0,
                 "amount": 500_000.0,
             },
+            {
+                "market": 2, "code": "920001", "price": 17.85,
+                "last_close": 17.0, "vol": 1_000.0, "amount": 1_785_000.0,
+            },
         ])
 
     def industries(symbols, *, refresh):
@@ -113,6 +117,12 @@ def test_stock_info_merges_sources_calculates_fields_and_restores_input_order(mo
                 "ipo_date": 20010827,
                 "updated_date": 20260630,
                 "jinglirun": 1.0,
+            }])
+        if symbol == "bj920001":
+            return pd.DataFrame([{
+                "code": "920001", "liutongguben": 8_000_000,
+                "zongguben": 10_000_000, "ipo_date": 20230101,
+                "updated_date": 20260630,
             }])
         return pd.DataFrame([{
             "code": "000001",
@@ -159,10 +169,13 @@ def test_stock_info_merges_sources_calculates_fields_and_restores_input_order(mo
 
     assert result.columns.tolist() == STOCK_INFO_COLUMNS
     assert result["full_code"].tolist() == ["sh600519", "sz000001", "bj920001", "sh600519"]
-    assert calls.count(("quotes", ["sh600519", "sz000001"])) == 1
+    assert calls.count(("quotes", ["sh600519", "sz000001", "bj920001"])) == 1
     assert calls.count(("finance", "sh600519")) == 1
     assert calls.count(("xdxr", "sh600519")) == 1
-    assert not any(call[0] in {"finance", "xdxr", "call_auction"} and call[1] == "bj920001" for call in calls)
+    assert calls.count(("finance", "bj920001")) == 1
+    assert calls.count(("xdxr", "bj920001")) == 1
+    assert ("call_auction", "bj920001") not in calls
+    assert result.attrs["skipped_sources"] == {"bj920001": ["call_auction"]}
 
     sh = result.iloc[0]
     assert sh["exchange"] == "sh"
@@ -194,6 +207,14 @@ def test_stock_info_merges_sources_calculates_fields_and_restores_input_order(mo
     bj = result.iloc[2]
     assert bj["category"] == "a_share"
     assert bj["board"] == "北交所"
+    assert bj["last_price"] == pytest.approx(17.85)
+    assert bj["circulating_shares"] == 8_000_000
+    assert bj["total_shares"] == 10_000_000
+    assert bj["turnover_rate"] == pytest.approx(1.25)
+    assert bj["total_market_value"] == pytest.approx(178_500_000)
+    assert bj["ipo_date"] == "2023-01-01"
+    assert bj["updated_date"] == "2026-06-30"
+    assert bj["open_amount_yuan"] is None
 
 
 def test_stock_info_maps_category_and_board_without_optional_data(monkeypatch):
@@ -375,3 +396,35 @@ def test_stock_info_binds_distinct_pooled_clients_to_workers(monkeypatch):
     assert quotes.client is created[0]
     quotes.close()
     assert all(client.closed for client in created)
+
+
+def test_beijing_stock_info_keeps_fractional_xdxr_equity_precision(monkeypatch):
+    quotes = _client()
+    _stub_stock_info_dependencies(
+        monkeypatch, quotes,
+        stocks=lambda _market: pd.DataFrame([{"code": "920026", "name": "卓兆点胶"}]),
+    )
+    monkeypatch.setattr(quotes, "quotes", lambda _symbols: pd.DataFrame([{
+        "market": 2, "code": "920026", "price": 17.85, "vol": 10_563,
+    }]))
+    actions = pd.DataFrame([{
+        "date": "2026-06-10", "category": 9,
+        "panhouliutong": 8662.2138671875, "houzongguben": 11490.814453125,
+    }])
+    actions.attrs["equity_unit"] = "ten_thousand_shares"
+    monkeypatch.setattr(quotes, "xdxr", lambda _symbol: actions)
+    monkeypatch.setattr(quotes, "finance", lambda _symbol: pd.DataFrame([{
+        "zongguben": 114908095.703125, "liutongguben": 86622099.609375,
+    }]))
+    monkeypatch.setattr(quotes, "call_auction", lambda _symbol: pytest.fail("BJ auction is unverified"))
+
+    row = quotes.stock_info("bj920026").iloc[0]
+
+    # Latest XDXR takes precedence over finance; convert 万股 to 股 before int.
+    assert row["circulating_shares"] == 86_622_138
+    assert row["total_shares"] == 114_908_144
+    assert row["circulating_market_value"] == pytest.approx(17.85 * 86_622_138)
+    assert row["total_market_value"] == pytest.approx(17.85 * 114_908_144)
+    assert row["turnover_rate"] == pytest.approx(10_563 * 100 / 86_622_138 * 100)
+    assert pd.isna(row["open_amount_yuan"])
+    assert actions.iloc[0]["panhouliutong"] == 8662.2138671875

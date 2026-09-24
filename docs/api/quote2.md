@@ -3,7 +3,8 @@
 扩展行情使用通达信 EX 主站，可读取港股、期货等服务器实际提供的品种。具体市场和品种
 以当前节点的 `markets()`、`instruments()` 返回为准；公共节点可用性及字段单位可能变化。
 
-构造参数与标准行情一致，默认启用单连接运行时容灾：
+通用连接及容灾参数与标准行情一致，默认启用单连接运行时容灾。
+`probe_symbols`、`probe_frequencies` 仅用于标准行情；扩展行情仍使用商品数量请求探测节点：
 
 ```python
 from tdxhub.quotes import Quotes
@@ -20,7 +21,9 @@ print(client.server_status())
 ```
 
 显式传入 `server` 时只使用该节点；只有同时设置 `fallback_servers=True` 才会追加配置中的
-EX 节点。`failover=False` 可关闭跨节点切换，`auto_retry` 仍负责当前节点内的重连。
+EX 节点。`failover=False` 表示只尝试一次；`auto_retry` 仅保留参数兼容，托管客户端不再叠加节点内重连或外层重试。
+`request_timeout`（默认等于 `timeout`）限制单次底层请求含故障转移的总网络等待预算；合法空结果不会重试。
+开启 `heartbeat=True` 后，心跳故障会隔离节点，下一次请求再切换。详见[超时与心跳边界](quote1.md#超时心跳与边界)。
 
 ## 01. 获取市场代码
 
@@ -107,6 +110,15 @@ client.minute(market=47, symbol='IF1709')
 # 简写方式
 client.minute(symbol="47#IF1709")
 ```
+
+> **数据口径与验证边界**：扩展市场使用独立的分时协议，不同于标准市场同名底层方法。
+> 返回 `hour`、`minute`、`price`、`avg_price`、`volume`、`open_interest`；
+> SDK 保留上游浮点价格与原始量值，不做统一乘 100，也不补成沪深 240/241 点。
+> 当前返回值没有交易日期或时区，夜盘跨日不能仅按时分排序或直接拼接本机日期。
+> `volume` 的单位与累计口径、`avg_price` 的计算方式，以及非期货品种
+> `open_interest` 的含义，需按市场另行核实，不能仅凭字段名认定。
+> 2026-09-21 的联网核验未取得可供交叉比对的有效分时响应；离线解析测试通过
+> 不等于真实行情准确性已验证。主站返回证券数量也不代表分时接口可用。
 
 ## 06. 历史分时行情
 

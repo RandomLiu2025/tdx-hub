@@ -10,6 +10,20 @@
 
 ---
 
+## 0.3.0 版本说明
+
+当前源码版本为 **0.3.0**，主要更新：
+
+- 将 TDX 协议实现内置到 `tdxhub.tdx`，移除外部 tdxpy/Cython 依赖。
+- 加强按市场/接口的主站能力探测、请求超时预算与心跳故障隔离，支持快照分批、去重与缺失诊断。
+- 加强 K 线/分笔分页完整性检查，资金流累计窗口与板块汇总不再静默返回残缺结果。
+- 修正财务摘要字段与单位、指数盘口语义、基金复权和历史股本换算，提供明确的数据质量状态。
+- 加强财务文件下载长度、MD5 与路径校验，完善协议回归和仓库外 wheel 安装验证。
+
+现有高层 API 入口保持不变，但财务字段口径和不完整数据的错误行为有变化，升级前请阅读
+[数据口径与准确性边界](#数据口径与准确性边界)与[数据完整性与异常处理](#数据完整性与异常处理)。
+底层 `tdxhub.tdx` 不承诺跨版本稳定。源码版本更新不代表已发布到 PyPI；以下说明以当前源码为准。
+
 ## 目录
 
 - [功能概览](#功能概览)
@@ -19,12 +33,14 @@
   - [2. 在线行情与指数获取](#2-在线行情与指数获取)
   - [3. 个股与指数区分说明](#3-个股与指数区分说明)
   - [4. 资金流向与主力监控](#4-资金流向与主力监控-capital-flow)
+- [数据完整性与异常处理](#数据完整性与异常处理)
 - [复权、GBBQ 与历史换手率](#复权gbbq-与历史换手率)
 - [官方配置与财务数据](#官方配置与财务数据)
 - [增量同步与 SQLite 持久化](#增量同步与-sqlite-持久化)
 - [HTTP API 服务](#http-api-服务)
 - [命令行工具 (CLI)](#命令行工具-cli)
 - [测试与本地开发](#测试与本地开发)
+- [TDX 模块维护](#tdx-模块维护)
 - [文档索引](#文档索引)
 - [License](#license)
 
@@ -56,9 +72,16 @@ PyPI 发行包名为 **`tdxhub-sdk`**；安装后直接使用 `import tdxhub`，
 python -m pip install -U tdxhub-sdk
 ```
 
+### 内置协议实现
+
+自 0.3.0 起，项目已将 `tdxpy 0.2.7` 的纯 Python 协议与文件读取实现迁入
+`tdxhub/tdx/`，不再依赖外部 `tdxpy` / `pytdx`，也不需要 Cython 编译。
+`Quotes`、`Reader`、财务、CLI 与 HTTP 的现有入口保持不变；`tdxhub.tdx` 是底层实现模块，不承诺跨版本 API 稳定性，不提供顶层 `tdx` / `tdxpy` 兼容别名。
+直接捕获 `tdxpy.exceptions` 的外部调用方需调整异常导入，因为内置异常与外部包不再是同一类型。
+
 ### 可选能力扩展
 
-根据业务需求安装扩展依赖：
+CLI 已包含在基础安装中，无需额外依赖；`[cli]` 仅保留为兼容空扩展。根据业务需求安装其他扩展：
 
 ```bash
 # 1. 支持节假日日历解析
@@ -76,12 +99,16 @@ python -m pip install -U "tdxhub-sdk[all]"
 ```bash
 git clone https://github.com/RandomLiu2025/tdx-hub.git
 cd tdx-hub
-uv sync --extra server --extra test
+uv sync --frozen --all-extras
+uv run --frozen tdxhub --version
 ```
 
 ---
 
 ## 快速开始
+
+在线示例依赖可访问的通达信公共行情节点，历史数据覆盖和节点可用性可能变化；本地读取仅需已有文件，
+不要求安装或运行通达信客户端。示例代码、日期及行业名称应按实际查询对象调整。
 
 ### 1. 读取本地 VIPDOC 文件
 
@@ -148,12 +175,28 @@ with Quotes.factory("std", timeout=5) as client:
 
     # 5. 资金流向与主力监控
     flow = client.capital_flow("sz002594")                        # 当日实时资金流分档与主力净流入
-    hist_flow = client.capital_flow("sh600519", date="20260914") # 指定历史日资金流
+    hist_flow = client.capital_flow("sh600519", date="20260914")    # 指定历史日资金流
 
     # 6. 证券分类与综合聚合
     etfs = client.stocks(market=1, security_type="etf")            # 筛选沪市所有 ETF
     summary = client.stock_info(["sh600519", "sz000001"])          # 37 列规范化聚合详情
 ```
+
+标准行情 `client.quotes(symbols, batch_size=80, diagnostics=True)` 自动分批、稳定去重，
+可通过 `df.attrs["diagnostics"]` 区分缺失行情和请求失败。
+主站按市场/接口缓存近期能力，详见 [标准行情 API](docs/api/quote1.md)。
+
+#### 数据口径与准确性边界
+
+- 分笔价格按品种精度解码（ETF、可转债不套用 A 股的两位小数）；分笔数量保留协议单位。
+- `get_k_data(code, start_date, end_date)` 按实际交易日期分页，区间为 **左闭右开** `[start_date, end_date)`，不按自然日推算记录偏移。
+- 指数快照没有可交易五档盘口，`bid/ask` 及其数量设为空；沪深指数提供 `up_count/down_count`，北交这两个字段尚未确认，保留为空。股票/基金盘口不变。
+- `stock_count(2)` 与 `stocks(2)` 使用相同的北交报告目录口径；SDK 可用 `stock_count(2, raw=True)` 查看不同口径的协议计数，不能把两者之差解释为漏股。
+- `minute_241()` 只用有效的 09:25～09:30 前成交推导竞价量额，新增 `auction_status`。缺失/不自洽时价格为空、量额为 0，且不扣减 09:31；它们不是零价成交。成功扣减时，09:31 的 OHLC 仍是原始分钟柱，不能反推为剔除竞价后的 OHLC。
+- 资金流是分笔估算，**不是交易所官方资金流，也不保证与其他软件算法一致**。当前仅股票/基金使用已确认的每手 100 股/份；未校准单位/币种的品种（如债券、B 股、指数）拒绝估算，但仍可读取原始分笔。特殊类型与无效成交被排除，SDK `attrs` 提供数量诊断；HTTP 保持原有行列表结构，不输出 `attrs`。
+- `finance()` 已修复金额被放大 10 倍和部分槽位误命名：金额按千元转元、股本按万股转股，每股指标不缩放。`finance_schema="tdx_finance_v2"` 标识新契约；错误旧名（如 `zhigonggu`、`farengu`、`changqifuzhai`）返回空值，请迁移到 `meigushouyi`、`shangniantongqiyingyeshouru`、`shaoshugudongquanyi` 等正确字段，完整清单见 [财务 API](docs/api/quote1.md#13-读取财务信息)。`raw_fields` 保留未换算槽位，`data_quality` 提供状态/未知项；`normalized` 仅表示已按字段表归一化，不是财报审计认证。不要对新结果再次除以 10。
+
+更多字段、状态与单位说明见 [标准行情 API](docs/api/quote1.md) 和 [财务字段映射表](docs/api/fields.md)。
 
 #### 常用 K 线频率说明
 
@@ -167,8 +210,16 @@ with Quotes.factory("std", timeout=5) as client:
 
 #### 容灾与节点热备机制
 标准与扩展行情客户端默认内置**有界自动故障转移**（Failover）：
-* 内部维护健康节点池，发生断线或协议错误时自动切换可用节点（默认冷却 60 秒）；
+* 内部维护健康节点池，发生断线时自动切换可用节点（连接故障默认冷却 60 秒），标准快照/K 线协议错误按接口能力暂避 300 秒；
 * 支持通过 `server=(ip, port)` 锁定特定服务器，或使用 `client.server_status()` 检查节点状态。
+* 可用 `probe_symbols=["sh600000", "sz000001", "bj920002"]` 和 `probe_frequencies=[9, 8]`
+  按目标市场分别探测 quotes/日 K/分钟 K，合法空响应记为能力未知；请使用当前有效证券作为样本。
+* `request_timeout`（默认等于 `timeout`）为每次底层请求提供跨连接、握手、分片和切换的总预算；
+  重试统一由节点池管理，`auto_retry` 仅保留参数兼容，不再叠加重试。
+* 开启 `heartbeat=True` 后，心跳故障隔离并关闭旧连接，下次请求切换；不保证公共主站 SLA 或数据新鲜度。
+
+默认启动探测仍为上海日 K（扩展行情为合约数量）。初始化探测、批量分页和连接池借用等待的预算边界
+见 [标准行情 API](docs/api/quote1.md#超时心跳与边界)。分页与聚合会发起多次底层请求，不能把单次请求预算当作整个高层调用的总时限。
 
 ---
 
@@ -183,7 +234,7 @@ with Quotes.factory("std", timeout=5) as client:
    * **指数专用 K 线**：使用 `client.index(...)` 或 `client.index_bars(...)`。
    * **个股/ETF K 线**：使用 `client.bars(...)`。
 3. **程序化判定证券类型**：
-   使用内置分类器 [`classify_security`](file:///Users/bytedance/work/project/person/tdx-hub/tdxhub/security.py#L56) 判断品种：
+   使用内置分类器 [`classify_security`](tdxhub/security.py) 判断品种：
    ```python
    from tdxhub.security import classify_security
 
@@ -197,19 +248,19 @@ with Quotes.factory("std", timeout=5) as client:
 
 ### 4. 资金流向与主力监控 (Capital Flow)
 
-资金流向模块基于全量逐笔分笔（Tick）成交数据，与主流机构软件（同花顺、东方财富、通达信）标准算法对齐，提供高精度、细颗粒度的主力与散户资金博弈监控工具。
+资金流向模块基于分笔（Tick）成交金额分档，提供主力与散户资金流估算。它不是交易所官方资金流，不保证与其他软件的算法或日 K 成交额完全一致；适用范围与排除记录见上方「数据口径与准确性边界」。
 
 #### 4.1 划分标准与计算逻辑
 
-按单笔成交金额严格切片划分四个档位（默认阈值可自定义）：
-- **超大单**：单笔成交额 $\ge 100$ 万元（机构核心大单）
-- **大单**：$20 \text{ 万元} \le$ 单笔成交额 $< 100$ 万元（主力活跃资金）
-- **中单**：$4 \text{ 万元} \le$ 单笔成交额 $< 20$ 万元（大散户 / 中户资金）
-- **小单**：单笔成交额 $< 4$ 万元（散户游资）
+按单笔成交金额划分四个档位（默认阈值可自定义；“主力/散户”是金额分档标签，不代表已识别交易者身份）：
+- **超大单**：单笔成交额 $\ge 100$ 万元
+- **大单**：$20 \text{ 万元} \le$ 单笔成交额 $< 100$ 万元
+- **中单**：$4 \text{ 万元} \le$ 单笔成交额 $< 20$ 万元
+- **小单**：单笔成交额 $< 4$ 万元
 - **聚合分类**：
   - **主力资金** = 超大单 + 大单
   - **散户资金** = 中单 + 小单
-- **主动买卖判定**：基于外盘（主动买入，成交于卖档）与内盘（主动卖出，成交于买档）判定资金进出方向：
+- **主动买卖判定**：按分笔协议的买卖方向标记估算；中性成交计入总成交额，不计入买卖净额：
   $$\text{主力净流入} = \text{主力主动买入额} - \text{主力主动卖出额}$$
   $$\text{主力净流入占比} = \frac{\text{主力净流入额}}{\text{全天总成交金额}} \times 100\%$$
 
@@ -222,15 +273,6 @@ with Quotes.factory("std", timeout=5) as client:
     # 1. 盘中实时个股资金流向（默认拉取当日全量逐笔实时聚合）
     flow = client.capital_flow("002594")  # 比亚迪
     print(flow)
-    #                   buy_amount   sell_amount    net_amount  net_pct  buy_volume  sell_volume  net_volume
-    # level
-    # 超大单          1.458316e+08  1.782017e+08 -3.237013e+07    -3.01      4910.0       6012.0     -1102.0
-    # 大单            2.946369e+08  3.716379e+08 -7.700098e+07    -7.17      9946.0      12534.0     -2588.0
-    # 中单            3.568444e+08  3.328329e+08  2.401155e+07     2.24     12053.0      11244.0       809.0
-    # 小单            2.766787e+08  1.913191e+08  8.535956e+07     7.95      9353.0       6459.0      2894.0
-    # 主力(超大+大单) 4.404685e+08  5.498396e+08 -1.093711e+08   -10.18     14856.0      18546.0     -3690.0
-    # 散户(中+小单)   6.335231e+08  5.241520e+08  1.093711e+08    10.18     21406.0      17703.0      3703.0
-    # 合计            1.073992e+09  1.073992e+09  0.000000e+00     0.00     36262.0      36249.0        13.0
 
     # 快捷提取核心属性（存储于 DataFrame attrs 中）
     print("主力净买入(元):", flow.attrs["main_net"])
@@ -244,7 +286,12 @@ with Quotes.factory("std", timeout=5) as client:
 
 #### 4.3 多日资金流向与主力 5日 / 20日 累计净流入 (`capital_flow_history`)
 
-回溯指定个股近 N 个交易日（默认 20 日，可指定 5、10、60 等任意天数），逐日计算成交额与各档位资金流，并输出 **5日/20日主力滚动累计净额及占比**：
+回溯指定个股近 N 个交易日（默认 20 日，`days` 必须为正整数），逐日计算成交额与各档位资金流，并输出 **5日/20日主力滚动累计净额及占比**。
+`days` 控制返回行数，SDK 会额外读取最多 19 个预热交易日；同一截止日和数据源下，`days=5` 不会把 20 日指标缩成 5 日合计。
+
+仅完整窗口才计算累计指标；历史不足时为 `NaN`（HTTP 为 `null`）。使用
+`window_5d_complete` / `window_20d_complete` 判断窗口是否完整，
+`window_5d_days` / `window_20d_days` 查看实际覆盖天数；缺少计算所需成交数据则抛出异常，而非填零。
 
 ```python
 with Quotes.factory("std", timeout=5) as client:
@@ -258,17 +305,13 @@ with Quotes.factory("std", timeout=5) as client:
     # 2. 查看逐日明细与滚动累计列
     cols = ["date", "close", "change_pct", "main_net", "main_5d_net", "main_20d_net"]
     print(hist[cols].tail())
-    #          date   close  change_pct      main_net   main_5d_net  main_20d_net
-    # 15 2026-09-08  108.50        0.84  1.250321e+07  3.541200e+07  1.120540e+08
-    # 16 2026-09-09  107.20       -1.20 -2.105400e+07  1.845000e+07  9.840210e+07
-    # 17 2026-09-10  109.00        1.68  3.412050e+07  4.512000e+07  1.254100e+08
-    # 18 2026-09-11  110.10        1.01  1.840200e+07  5.120400e+07  1.320450e+08
-    # 19 2026-09-14  111.50        1.27 -1.093711e+07  2.898160e+07  1.152439e+08
 ```
 
 #### 4.4 行业板块资金流向汇总及成分股穿透 (`sector_capital_flow`)
 
-支持按行业名称模糊检索（覆盖通达信 110 个细分行业及申万一级/二级/三级行业，如 "白酒"、"半导体"、"银行"、"汽车整车"），或传入自定义成分股代码列表。输出板块主力净流入汇总、领涨龙头与出逃股，以及所有成分股降序明细：
+支持按行业名称模糊检索（通达信行业及申万一级/二级/三级行业，如 "白酒"、"半导体"、"银行"、"汽车整车"），或传入自定义成分股代码列表。行业覆盖以当前配置文件为准。
+输出板块主力净流入汇总、净流入/净流出最多的成分股，以及按主力净买入降序排列的明细。
+成分股按市场与代码去重；任一成分股失败或无有效成交数据时，整体抛出 `TdxhubIncompleteDataError`，不交付部分板块总量。
 
 ```python
 with Quotes.factory("std", timeout=5) as client:
@@ -308,6 +351,34 @@ with Quotes.factory("std", timeout=5) as client:
 
 ---
 
+## 数据完整性与异常处理
+
+在线数据的“缺失”“请求失败”和“真实零成交”含义不同，不应统一填成 0：
+
+| 场景 | 当前行为 | 调用方建议 |
+|---|---|---|
+| 批量快照 | `quotes(..., diagnostics=True)` 在 `attrs["diagnostics"]` 提供 `status`、`missing`、批次数与去重数 | 检查 `ok` / `missing` / `request_failed` 等状态，不只检查表是否为空 |
+| K 线/分笔分页 | 连接失败抛出 `TdxhubConnectionError`；到达协议偏移上限仍无法确认完整性时抛出 `TdxhubIncompleteDataError` | 缩小区间或检查节点，不将部分数据当作全量历史 |
+| 多日资金流 | 窗口历史不足返回缺失指标；计算范围内缺少必要成交数据则抛出异常 | 检查窗口完整性字段，区分历史不足与请求失败 |
+| 板块资金流 | 任一成分股失败导致整次汇总失败 | 查看异常原因并重试，不忽略失败成分 |
+
+```python
+from tdxhub.exceptions import TdxhubConnectionError, TdxhubIncompleteDataError
+from tdxhub.quotes import Quotes
+
+try:
+    with Quotes.factory("std", timeout=5, request_timeout=8) as client:
+        history = client.bars_all("sh600000", frequency=9, since="20250101")
+except (TdxhubConnectionError, TdxhubIncompleteDataError) as exc:
+    print(f"未能取得完整历史数据：{exc}")
+```
+
+这不是所有异常类型的穷举：非法参数和底层协议错误仍可能抛出各自异常。
+DataFrame 的 `attrs` 是 SDK 辅助元数据，导出或 pandas 转换后不保证保留；需要诊断时应单独保存。
+HTTP 不序列化 `attrs`，应同时检查响应状态与业务字段 `code`。
+
+---
+
 ## 复权、GBBQ 与历史换手率
 
 全量日 K 线可在分页合并后自动执行前复权/后复权，并结合历史流通股本计算换手率：
@@ -326,7 +397,10 @@ with Quotes.factory("std", timeout=5) as client:
     )
 ```
 
-底层复权与股本快照模块亦可独立调用：
+复权只调整价格，不改变实际成交量和成交金额；历史换手率仍使用当日实际成交量及对应流通股本。
+基金/ETF 支持现金分红与扩缩股事件，保留三位价格精度，股票保留两位。
+
+底层复权与股本快照模块亦可独立调用（`prices` 为行情 DataFrame，`actions` 为对应证券的 GBBQ/XDXR 事件）：
 
 ```python
 from tdxhub.gbbq import adjust_prices, get_equity_snapshot, normalize_gbbq
@@ -369,14 +443,9 @@ with Quotes.factory("std", timeout=5) as client:
 
 ```python
 with Quotes.factory("std", timeout=5) as client:
-    # 查询指定个股（支持单个代码或列表；为 None 时返回全市场 8000+ 只证券）
+    # 查询指定个股（支持单个代码或列表；为 None 时返回当前报告覆盖的全部证券）
     stats = client.statistics(["600519", "002594", "300750", "000001"])
     print(stats[["code", "date", "pe_ttm", "pe_static", "dividend_yield", "trend_days", "change_pct", "change_5d", "change_20d", "change_ytd"]])
-    #      code      date  pe_ttm  pe_static  dividend_yield  trend_days  change_pct  change_5d  change_20d  change_ytd
-    # 0  000001  20260914    5.29     5.3939            5.14           1        0.94       1.28        6.76        7.24
-    # 1  002594  20260914   26.46    23.8782            0.42           2        1.70      -1.25       -4.95      -12.25
-    # 2  300750  20260914   18.35    21.6027            2.44           1        2.00      -3.18      -15.72       -6.07
-    # 3  600519  20260914   19.62    19.4066            4.07           1        0.22      -2.89       -1.17       -5.28
 ```
 
 > **HTTP API**：`GET /tdx/stat`（支持 `?codes=600519,002594` 过滤）。
@@ -390,12 +459,6 @@ with Quotes.factory("std", timeout=5) as client:
     # 1. 获取全市场近期新股申购日历（别名 client.ipo() / client.new_stocks()）
     ipos = client.xgsg()
     print(ipos[["market", "code", "name", "date", "issue_price"]].head())
-    #    market    code      name      date  issue_price
-    # 0      sz  001246  力勤资源  20260918         5.15
-    # 1      sz  301716   鸿富诚  20260916         0.00
-    # 2      bj  920025  凯达重工  20260914         4.26
-    # 3      sz  301686  中塑股份  20260910        55.28
-    # 4      bj  920229  世纪数码  20260909        15.67
 
     # 2. 查询指定新股发行信息
     single_ipo = client.xgsg("001246")  # 支持纯数字或 "sz001246"
@@ -416,6 +479,25 @@ manifest = Affair.files()
 archive = Affair.fetch(downdir="output", filename="gpcw19960630.zip")
 finance_df = Affair.parse(downdir="output", filename="gpcw19960630.zip")
 ```
+
+财务文件按分块实际内容组装，分块长度不一致会抛出 `tdxhub.tdx.errors.ProtocolError`。
+按清单下载（`Affair.fetch()` 不指定 `filename`）还会校验 MD5；已知文件长度时，
+超出清单大小或连续三次空块仍未下载完成也会抛出 `ProtocolError`，不返回截断文件。
+未知长度的底层下载以空块作为结束标志；指定 `filename` 的直接下载不执行清单 MD5 校验。
+
+内置财务 crawler 支持默认临时文件和指定保存路径；ZIP 按内容识别，不依赖下载文件的后缀，
+压缩包需包含且仅包含一个 DAT 文件。`fetch_and_parse()` 在成功或解析失败后均关闭下载流；
+直接调用 crawler 的 `parse()` 时，文件流由调用方负责关闭。
+
+HTTP 模式始终按 `chunksize` 分块读取（默认 50 KiB，必须为正整数），不因缺少长度头而一次性读入内存。
+存在 `Content-Length` 时校验其格式及响应体长度，截断或读取到超出声明长度的数据会抛出 `ProtocolError`；
+缺少长度头时以 EOF 为结束标志，无法仅凭长度检查完整性。进度回调为 `(downloaded, total_size)`，
+未知总长为 `0`，正常 EOF 时也会回调一次。
+`fetch_via_http()` 及 HTTP 模式下的 `fetch_and_parse()` 支持 `timeout=30`（秒，可设置为有限正数），
+限制阻塞网络操作的等待时间，而非整个文件的下载时限；连接、读取、校验或回调失败都会关闭下载流。
+`chunksize`、`timeout` 非法时，在联网或打开目标文件前抛出 `ValueError`。
+底层 `get_report_file_by_size()` 的 `filesize` 必须为非负整数（`0` 表示未知长度），
+非法值抛出 `ValueError`；畸形分块响应统一抛出包含文件名及偏移的 `ProtocolError`。这些数值参数均不接受布尔值。
 
 ---
 
@@ -444,7 +526,7 @@ with Quotes.factory("std", timeout=5) as client, SQLiteStore("market.db") as sto
 
 ## HTTP API 服务
 
-安装 `tdxhub[server]` 后，可通过依赖注入快速启动高性能 FastAPI 数据服务：
+安装 `tdxhub-sdk[server]` 后，可通过依赖注入启动 FastAPI 数据服务。将下面代码保存为 `serve_tdxhub.py`：
 
 ```python
 # serve_tdxhub.py
@@ -472,9 +554,16 @@ def make_app():
 
 启动命令：
 ```bash
-uvicorn serve_tdxhub:make_app --factory --host 127.0.0.1 --port 8000 --workers 1
+python -m uvicorn serve_tdxhub:make_app --factory --host 127.0.0.1 --port 8000 --workers 1
 ```
-启动后访问交互式 Swagger UI 文档：<http://127.0.0.1:8000/docs>。
+源码开发环境下，在命令前加 `uv run --frozen`。启动后访问交互式 Swagger UI 文档：<http://127.0.0.1:8000/docs>。
+`GET /` 检查进程存活，`GET /ready` 检查是否已注入标准行情客户端（不主动探测上游连接或数据新鲜度）。此示例仅注入标准行情客户端，
+使用 `/ex/*` 扩展行情路由时还需注入扩展行情客户端并管理其生命周期。
+默认仅监听本机；对外提供服务前应另行配置认证、限流和访问控制。
+
+响应使用统一包络 `{"code": 0, "msg": "ok", "data": ...}`，失败时为 `code=1, data=null`。
+部分上游请求失败仍返回 HTTP 200，**不能仅凭 HTTP 状态码判断成功**；DataFrame 转为行列表，
+缺失数值为 `null`，不包含 `attrs` 中的资金流汇总与诊断信息。
 
 ### 核心接口路由速查
 
@@ -486,10 +575,10 @@ uvicorn serve_tdxhub:make_app --factory --host 127.0.0.1 --port 8000 --workers 1
 | **官方统计** | `GET /tdx/stat` | `codes` (可选, 多代码逗号分隔) | 官方估值与综合统计（市盈TTM、股息率、连涨天数等） |
 | **新股申购** | `GET /tdx/xgsg` 或 `GET /ipo` | `code` (可选) | 全市场拟上市及已申购新股日历与发行信息 |
 | **官方报告** | `GET /tdx/stat2` | 无 | 官方盘后资金流数据包 |
-| **实时行情** | `GET /quotes` | `codes` (如 `sh600000,000001`) | 多标的实时切片快照 |
+| **实时行情** | `GET /quote` | `codes` (如 `sh600000,000001`) | 多标的实时切片快照 |
 | **分时逐笔** | `GET /minute` / `GET /trade/all` | `code` | 盘中分时与当日逐笔成交明细 |
 | **K 线行情** | `GET /kline/day/all` | `code`, `since`, `adjust` (qfq/hfq) | 全量历史日 K 线（支持自动前/后复权） |
-| **指数行情** | `GET /index/day/all` | `code`, `since` | 沪深北大盘与行业指数全量日 K 线 |
+| **指数行情** | `GET /index/day/all` | `code` | 沪深北大盘与行业指数全量日 K 线 |
 
 #### 资金流向接口调用示例
 
@@ -501,7 +590,7 @@ curl -s "http://127.0.0.1:8000/capital_flow?code=002594"
 curl -s "http://127.0.0.1:8000/capital_flow/history?code=002594&days=20"
 
 # 3. 查询白酒行业板块主力资金流向及成分股净买入排行
-curl -s "http://127.0.0.1:8000/capital_flow/sector?name=白酒"
+curl -sG "http://127.0.0.1:8000/capital_flow/sector" --data-urlencode "name=白酒"
 
 # 4. 查询指定股票估值统计指标（市盈TTM、静态市盈、股息率、连涨天数、区间涨跌幅）
 curl -s "http://127.0.0.1:8000/tdx/stat?codes=600519,002594"
@@ -511,13 +600,15 @@ curl -s "http://127.0.0.1:8000/tdx/stat?codes=600519,002594"
 
 ## 命令行工具 (CLI)
 
+基础安装已提供 `tdxhub` 命令，也可使用 `python -m tdxhub`。源码环境下使用 `uv run --frozen tdxhub ...`。
+
 ```bash
 # 查看全局帮助与版本
 tdxhub --help
 tdxhub --version
 
 # 读取本地日 K 线
-tdxhub reader --tdxdir D:\new_tdx --symbol 600000 --action daily
+tdxhub reader --tdxdir "D:\new_tdx" --symbol 600000 --action daily
 
 # 查询在线行情日 K 线
 tdxhub quotes --symbol 600000 --action daily
@@ -528,7 +619,7 @@ tdxhub bestip --limit 5
 # 查看与下载财务文件
 tdxhub affair --listfile
 
-# 批量打包导出指定股票数据
+# 批量导出指定股票当前分页行情（不是全量历史，默认保存到 bundle/）
 tdxhub bundle --symbol 600000,000001 --action daily
 ```
 
@@ -537,15 +628,81 @@ tdxhub bundle --symbol 600000,000001 --action daily
 ## 测试与本地开发
 
 ```bash
-# 运行单元测试（排除外网依赖）
-uv run pytest -q -m "not network"
+# 安装锁定的完整运行/测试依赖
+uv sync --frozen --all-extras
 
-# 运行代码规范检查
-uv run ruff check tdxhub tests
+# 锁文件、依赖、关键 Ruff、编译、离线回归与 wheel/sdist 检查
+make check
 
-# 执行完整构建
-uv build
+# 仓库外新建环境，只安装 wheel 和锁定依赖，验证无外部 tdxpy/pytdx/Cython
+make wheel-check
+
+# 可选：报告包含既有代码债务的全部 Ruff 规则
+make lint-all
 ```
+
+常用任务（完整列表见 `make help`）：
+
+| 命令 | 用途 |
+|---|---|
+| `make test` | 默认离线回归，排除 `network` 与 `integration` 标记 |
+| `make test-network` | 公共网络行情测试，需要可访问的外部节点 |
+| `make test-vipdoc TDXHUB_TDXDIR="/path/to/new_tdx"` | 使用本地通达信数据运行集成测试 |
+| `make build` | 生成 `dist/` 下的 wheel 与 sdist |
+| `make package-check` | 构建并校验元数据、源码、README、许可证及必需资源 |
+| `make pack` | 打包包含源码、测试、文档和锁文件的源码快照 |
+
+`make test`、`make check` 等测试命令使用锁定的完整依赖；`make lint-all` 可能报告既有代码债务，
+不是默认 `make check` 的全量 Ruff 门禁。网络测试结果受节点及交易日影响，不替代离线回归。
+
+CI 使用 uv：Linux Python 3.11–3.14 的 core/all 依赖矩阵，另有 Linux/macOS/Windows
+Python 3.12 的独立 wheel 冒烟。网络行情测试不在默认离线门禁中；工作流配置不等于远端已验证。
+
+---
+
+## TDX 模块维护
+
+源自 [tdxpy](https://github.com/mootdx/tdxpy) **0.2.7**（MIT），现由本项目维护。
+不依赖外部 `tdxpy` / `pytdx` / Cython，不注册顶层 `tdx` 或 `tdxpy` 别名。
+
+### 模块职责
+
+| 模块 | 职责 |
+| --- | --- |
+| `client.py` / `extended.py` | 标准行情 `StandardClient` / 扩展行情 `ExtendedClient` |
+| `transport.py` / `heartbeat.py` | Socket 连接、流量统计、调用包装与心跳 |
+| `protocol/std` / `protocol/ext` | 请求编码、响应解析；公共收发及解压校验在 `protocol/base.py` |
+| `codec.py` / `constants.py` | 二进制字段解码、证券分类、价格系数与协议常量 |
+| `errors.py` | 连接、调用与协议异常，上层无需导入具体解析器 |
+| `files/` | 本地行情、板块、财务文件读取 |
+| `crawler/` | 财务文件读取器所需的下载支持 |
+
+上层行情、主站探测、财务共用 `StandardClient`；基金价格在解析时按系数转换一次，
+证券目录昨收直接解码 float32，不再通过业务兼容层补做。日线分类统一在 `files`，
+旧 `contrib.compat.TdxhubDailyBarReader` 保留为别名。Socket 兼容派生类保持原有行为。
+协议日志名称为 `tdxhub.tdx`。版本统一使用 `tdxhub.__version__` 或 `python -m tdxhub --version`，不保留底层 `version.py`。
+
+`tdxhub.tdx` 不带下划线，但仍是底层实现，**不承诺其 API 跨版本稳定**。
+应用继续使用 `tdxhub.quotes.Quotes`、`tdxhub.reader.Reader` 等现有入口。
+需要捕获协议错误时可从 `tdxhub.tdx.errors` 导入；外部 `tdxpy.exceptions` 类型不能捕获内部异常。
+
+### 来源与授权
+
+- [根目录 LICENSE](LICENSE)：本项目当前版权声明及完整 MIT 条款；
+  [AUTHORS.rst](AUTHORS.rst) 为开发团队文档，不要求固定作者名单。
+  两份文件均以根目录最新内容为准：sdist 保留在根目录，wheel 放入 `.dist-info/licenses/`。
+- 上游来源与版本统一记录在本节，不再维护独立来源清单或历史哈希文件。
+- 当前源码由 Git 与回归测试维护；包检查逐字节比较 wheel/sdist 和当前工作区源码及许可证，
+  并校验根 README 的分发内容。引入新的上游版本时，同步更新本节来源说明并保留相应版权与许可条款。
+
+### 维护验证
+
+1. 按职责修改模块，不整体覆盖上游代码；保留版权与来源。
+2. 补充 `tests/tdx` 的离线报文/文件回归，防止重复缩放、旧路径或外部依赖回流。
+3. 运行 `make check`，再运行 `make wheel-check`，验证仓库外安装且全部底层模块可加载。
+4. 打包检查拒绝旧 `_vendor`、`_tdx`、`tdxpy_compat`、旧许可证资源包、模块 README、独立来源清单以及编译残留。
+5. 本节统一维护模块说明，不再保留 `tdxhub/tdx` 下的独立 README。根 README 随 sdist 分发，
+   并作为 wheel 元数据中的项目说明；发布校验确保说明、LICENSE、AUTHORS.rst 和源码与当前工作区一致，并检查 MIT 基本条款与许可证元数据。
 
 ---
 
@@ -556,11 +713,13 @@ uv build
 - **快速上手**：[快速上手指南](docs/quick.md) · [环境安装与配置](docs/setup.md)
 - **在线行情 API**：[标准行情接口 (StdQuotes)](docs/api/quote1.md) · [扩展行情接口 (ExtQuotes)](docs/api/quote2.md) · [辅助函数说明](docs/api/extras.md)
 - **本地读取与财务**：[VIPDOC 本地文件读取](docs/api/reader.md) · [专业财务数据 (Affair)](docs/api/affair.md) · [财务字段映射表](docs/api/fields.md)
-- **命令行使用**：[在线行情 CLI](docs/cli/quotes.md) · [本地读取 CLI](docs/cli/reader.md) · [财务下载 CLI](docs/cli/affair.md) · [行情测速 CLI](docs/cli/bestip.md) · [离线批量导出 CLI](docs/cli/bundle.md)
-- **设计与架构**：[ETF 与指数行情准确性设计](docs/design/202609132344-etf-index-accuracy-fix.md)
+- **命令行使用**：[在线行情 CLI](docs/cli/quotes.md) · [本地读取 CLI](docs/cli/reader.md) · [财务下载 CLI](docs/cli/affair.md) · [行情测速 CLI](docs/cli/bestip.md) · [在线批量导出 CLI](docs/cli/bundle.md)
+- **协议内置化**：[TDX 模块维护](#tdx-模块维护)
 
 ---
 
 ## License
 
 本项目遵循 [MIT License](LICENSE) 开源协议。仅供个人学习、量化研究及合法的数据合规处理使用。
+
+内置 TDX 代码源自 tdxpy 0.2.7（MIT），来源与维护方式见 [TDX 模块维护](#tdx-模块维护)。根目录 [LICENSE](LICENSE) 和 [AUTHORS.rst](AUTHORS.rst) 随源码和发行包一并提供。

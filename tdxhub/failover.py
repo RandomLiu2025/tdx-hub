@@ -2,17 +2,67 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any
 
-from tdxpy.exceptions import TdxConnectionError, TdxFunctionCallError
+from tdxhub.tdx.deadline import LockTimeout, deadline_lock, remaining, request_budget
+from tdxhub.tdx.errors import (
+    ProtocolError,
+    ResponseHeaderRecvFails,
+    ResponseRecvFails,
+    SendRequestPkgFails,
+    TdxConnectionError,
+    TdxFunctionCallError,
+)
 
 Endpoint = tuple[str, int]
 _RETRYABLE_ERRORS = (OSError, TdxConnectionError, TdxFunctionCallError)
+
+Capability = tuple[str, tuple[int, ...], int | None]
+
+
+def request_capability(name: str, args: tuple, kwargs: dict) -> Capability | None:
+    """Use only validated, bounded market/interface keys, never security codes."""
+
+    def argument(index, key):
+        return args[index] if len(args) > index else kwargs.get(key)
+
+    if name in {"get_security_bars", "get_index_bars"}:
+        category, market = argument(0, "category"), argument(1, "market")
+        if market in (0, 1, 2) and isinstance(category, int) and 0 <= category <= 11:
+            return name, (market,), category
+    elif name == "get_security_quotes":
+        stocks = argument(0, "all_stock")
+        if (
+            isinstance(stocks, (list, tuple))
+            and stocks
+            and all(isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], int) for item in stocks)
+        ):
+            markets = tuple(sorted({item[0] for item in stocks}))
+            if all(market in (0, 1, 2) for market in markets):
+                return name, markets, None
+    return None
+
+
+def _is_protocol_error(error: BaseException) -> bool:
+    # EOF / send failures are transport-wide, not evidence of unsupported interfaces.
+    original = getattr(error, "original_exception", None) or error
+    return isinstance(original, ProtocolError) and not isinstance(
+        original, (ResponseHeaderRecvFails, ResponseRecvFails, SendRequestPkgFails)
+    )
+
+
+@dataclass
+class _CapabilityState:
+    status: str
+    expires_at: float
+    last_error: str | None = None
 
 
 @dataclass
@@ -32,10 +82,15 @@ class EndpointPool:
         *,
         cooldown: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
+        capability_ttl: float = 300.0,
     ) -> None:
         if cooldown < 0:
             raise ValueError("cooldown 必须大于等于 0")
 
+        if capability_ttl < 0:
+            raise ValueError("capability_ttl 必须大于等于 0")
+        self.capability_ttl = float(capability_ttl)
+        self._capabilities: dict[tuple[Endpoint, Capability], _CapabilityState] = {}
         self.cooldown = float(cooldown)
         self._clock = clock or time.monotonic
         self._lock = threading.RLock()
@@ -44,12 +99,37 @@ class EndpointPool:
             endpoint = (str(address), int(port))
             self._states.setdefault(endpoint, _EndpointState(endpoint))
 
-    def available(self) -> list[Endpoint]:
-        """Return endpoints whose cooldown has elapsed, preserving order."""
+    def _prune_capabilities(self) -> None:
+        now = self._clock()
+        self._capabilities = {key: state for key, state in self._capabilities.items() if state.expires_at > now}
 
+    def capability_status(self, endpoint: Endpoint, capability: Capability | None) -> str:
+        with self._lock:
+            self._prune_capabilities()
+            state = self._capabilities.get((endpoint, capability))
+            return state.status if state else "unknown"
+
+    def report_capability(
+        self, endpoint: Endpoint, capability: Capability, status: str, error: str | None = None
+    ) -> None:
+        if status not in {"supported", "unknown", "failed"}:
+            raise ValueError("invalid capability status")
+        with self._lock:
+            self._prune_capabilities()
+            self._capabilities[endpoint, capability] = _CapabilityState(
+                status, self._clock() + self.capability_ttl, error
+            )
+
+    def available(self, capability: Capability | None = None) -> list[Endpoint]:
+        """Prefer demonstrated support; failures expire and never imply permanent exclusion."""
         now = self._clock()
         with self._lock:
-            return [state.endpoint for state in self._states.values() if state.cooldown_until <= now]
+            self._prune_capabilities()
+            endpoints = [state.endpoint for state in self._states.values() if state.cooldown_until <= now]
+            if capability is None:
+                return endpoints
+            endpoints = [ep for ep in endpoints if self.capability_status(ep, capability) != "failed"]
+            return sorted(endpoints, key=lambda ep: self.capability_status(ep, capability) != "supported")
 
     def report_failure(self, endpoint: Endpoint, error: BaseException) -> None:
         """Record a failed request and start the endpoint cooldown."""
@@ -74,8 +154,27 @@ class EndpointPool:
 
         now = self._clock()
         with self._lock:
+            self._prune_capabilities()
             return [
                 {
+                    **(
+                        {
+                            "capabilities": [
+                                {
+                                    "interface": key[0],
+                                    "markets": list(key[1]),
+                                    "category": key[2],
+                                    "status": cap.status,
+                                    "ttl_remaining": max(0.0, cap.expires_at - now),
+                                    "last_error": cap.last_error,
+                                }
+                                for (ep, key), cap in self._capabilities.items()
+                                if ep == state.endpoint
+                            ]
+                        }
+                        if any(ep == state.endpoint for ep, _ in self._capabilities)
+                        else {}
+                    ),
                     "server": state.endpoint,
                     "active": state.endpoint == current,
                     "failures": state.failures,
@@ -84,6 +183,20 @@ class EndpointPool:
                 }
                 for state in self._states.values()
             ]
+
+
+def _bounded_request(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        try:
+            with request_budget(self.request_timeout, self._clock), deadline_lock(self._lock):
+                return method(self, *args, **kwargs)
+        except TimeoutError:
+            if self.raise_exception:
+                raise
+            return False if method.__name__ == "connect" else None
+
+    return call
 
 
 class FailoverClient:
@@ -95,15 +208,22 @@ class FailoverClient:
         client_factory: Callable[[], Any],
         *,
         timeout: float = 3,
+        request_timeout: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
         max_failovers: int = 2,
         raise_exception: bool = True,
         on_switch: Callable[[Endpoint], None] | None = None,
     ) -> None:
-        if timeout <= 0:
+        if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout 必须大于 0")
         if max_failovers < 0:
             raise ValueError("max_failovers 必须大于等于 0")
 
+        request_timeout = timeout if request_timeout is None else request_timeout
+        if not math.isfinite(request_timeout) or request_timeout <= 0:
+            raise ValueError("request_timeout 必须是大于 0 的有限数字")
+        self.request_timeout = request_timeout
+        self._clock = clock
         self.endpoint_pool = endpoint_pool
         self.client_factory = client_factory
         self.timeout = timeout
@@ -120,14 +240,21 @@ class FailoverClient:
         client = self._client
         self._connected = False
         if client is not None and hasattr(client, "close"):
-            # A broken transport may make tdxpy.disconnect() fail as well.
+            # A broken transport may make client.disconnect() fail as well.
             with suppress(Exception):
                 client.close()
 
     def _connect_endpoint(self, endpoint: Endpoint) -> bool:
+        remaining()
         client = self.client_factory()
+        # The proxy owns retries; the raw client must fail on its first error.
+        client.auto_retry = False
+        client.raise_exception = True
+        client.heartbeat_runner = lambda: self._run_heartbeat(client)
+        client.heartbeat_error_callback = lambda error: self._heartbeat_failed(client, endpoint, error)
         try:
             connected = client.connect(*endpoint, time_out=self.timeout)
+            remaining()
             if not connected:
                 raise TdxConnectionError(f"无法连接行情服务器 {endpoint[0]}:{endpoint[1]}")
         except _RETRYABLE_ERRORS:
@@ -145,6 +272,7 @@ class FailoverClient:
             self.on_switch(endpoint)
         return True
 
+    @_bounded_request
     def connect(self) -> bool:
         """Connect to the first currently available endpoint."""
 
@@ -155,6 +283,7 @@ class FailoverClient:
             last_error: BaseException | None = None
             endpoints = self.endpoint_pool.available()[: self.max_failovers + 1]
             for endpoint in endpoints:
+                remaining()
                 try:
                     return self._connect_endpoint(endpoint)
                 except _RETRYABLE_ERRORS as exc:
@@ -162,6 +291,7 @@ class FailoverClient:
                     last_error = exc
                     self._last_error = exc
 
+            remaining()
             if self.raise_exception:
                 error = last_error or self._last_error
                 if error is not None:
@@ -186,6 +316,8 @@ class FailoverClient:
             self.endpoint_pool,
             self.client_factory,
             timeout=self.timeout,
+            request_timeout=self.request_timeout,
+            clock=self._clock,
             max_failovers=self.max_failovers,
             raise_exception=self.raise_exception,
             on_switch=self.on_switch,
@@ -195,54 +327,91 @@ class FailoverClient:
         current = self.endpoint if self._connected else None
         return self.endpoint_pool.snapshot(current=current)
 
+    def _heartbeat_failed(self, client, endpoint, error):
+        original = getattr(error, "original_exception", None) or error
+        if isinstance(original, LockTimeout):
+            return
+        with self._lock:
+            if not self._connected or self._client is not client:
+                return
+            self.endpoint_pool.report_failure(endpoint, error)
+            self._last_error = error
+            self._close_current()
+
+    def _run_heartbeat(self, client):
+        try:
+            with request_budget(self.request_timeout, self._clock), deadline_lock(self._lock):
+                if not self._connected or self._client is not client:
+                    return
+                try:
+                    result = client.do_heartbeat()
+                    remaining()
+                    return result
+                except Exception as exc:
+                    original = getattr(exc, "original_exception", None) or exc
+                    if isinstance(original, LockTimeout):
+                        if original is exc:
+                            raise
+                        raise original from exc
+                    self._heartbeat_failed(client, self.endpoint, exc)
+                    raise
+        except LockTimeout:
+            # Busy foreground calls are not failed heartbeats; try again next interval.
+            return
+
+    @_bounded_request
     def _invoke(self, name: str, *args: Any, **kwargs: Any) -> Any:
         with self._lock:
-            if not self._connected and not self.connect():
-                return None
-
-            attempted: set[Endpoint] = set()
-            failovers = 0
-            last_error: BaseException | None = None
-
-            while self.endpoint is not None and self._connected:
-                endpoint = self.endpoint
-                attempted.add(endpoint)
+            capability = request_capability(name, args, kwargs)
+            candidates = self.endpoint_pool.available(capability)
+            # Retain the active socket unless another server has stronger evidence.
+            if (
+                self._connected
+                and self.endpoint in candidates
+                and (
+                    capability is None
+                    or self.endpoint_pool.capability_status(self.endpoint, capability)
+                    == self.endpoint_pool.capability_status(candidates[0], capability)
+                )
+            ):
+                candidates.remove(self.endpoint)
+                candidates.insert(0, self.endpoint)
+            last_error = self._last_error
+            for endpoint in candidates[: self.max_failovers + 1]:
+                remaining()
+                if not self._connected or self.endpoint != endpoint:
+                    self._close_current()
+                    try:
+                        self._connect_endpoint(endpoint)
+                    except _RETRYABLE_ERRORS as exc:
+                        self.endpoint_pool.report_failure(endpoint, exc)
+                        last_error = self._last_error = exc
+                        continue
                 method = getattr(self._client, name)
                 try:
                     result = method(*args, **kwargs)
+                    remaining()
                 except _RETRYABLE_ERRORS as exc:
-                    self.endpoint_pool.report_failure(endpoint, exc)
+                    original = getattr(exc, "original_exception", None) or exc
+                    if isinstance(original, LockTimeout):
+                        if original is exc:
+                            raise
+                        raise original from exc
+                    if capability is not None and _is_protocol_error(exc):
+                        self.endpoint_pool.report_capability(endpoint, capability, "failed", str(exc))
+                    else:
+                        self.endpoint_pool.report_failure(endpoint, exc)
                     self._close_current()
-                    last_error = exc
-                    self._last_error = exc
+                    last_error = self._last_error = exc
                 else:
                     self.endpoint_pool.report_success(endpoint)
+                    if capability is not None:
+                        self.endpoint_pool.report_capability(endpoint, capability, "supported" if result else "unknown")
                     self._last_error = None
                     return result
-
-                while failovers < self.max_failovers:
-                    next_endpoint = next(
-                        (candidate for candidate in self.endpoint_pool.available() if candidate not in attempted),
-                        None,
-                    )
-                    if next_endpoint is None:
-                        break
-
-                    attempted.add(next_endpoint)
-                    failovers += 1
-                    try:
-                        self._connect_endpoint(next_endpoint)
-                        break
-                    except _RETRYABLE_ERRORS as exc:
-                        self.endpoint_pool.report_failure(next_endpoint, exc)
-                        last_error = exc
-                        self._last_error = exc
-
-                if not self._connected:
-                    break
-
-            if self.raise_exception and last_error is not None:
-                raise last_error
+            remaining()
+            if self.raise_exception:
+                raise last_error or TdxConnectionError(f"当前没有可用的行情服务器 capability={capability}")
             return None
 
     def __getattr__(self, name: str) -> Any:

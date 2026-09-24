@@ -46,16 +46,16 @@ def test_cash_dividend_keeps_volume(prices, actions):
     assert hfq["volume"].equals(prices["volume"])
 
 
-def test_share_change_scales_volume(prices):
+def test_share_change_preserves_actual_volume(prices):
     actions = pd.DataFrame(
         {"category": [1], "fenhong": [0.0], "peigu": [0.0], "peigujia": [0.0], "songzhuangu": [10.0]},
         index=[prices.index[2]],
     )
     qfq = reversion("600000", prices, actions, "qfq")
     assert qfq.iloc[0]["close"] < prices.iloc[0]["close"]
-    assert qfq.iloc[0]["volume"] > prices.iloc[0]["volume"]
+    assert qfq["volume"].equals(prices["volume"])
     hfq = reversion("600000", prices, actions, "hfq")
-    assert hfq.iloc[-1]["volume"] < prices.iloc[-1]["volume"]
+    assert hfq["volume"].equals(prices["volume"])
 
 
 def test_factor_reversion_aligns_only_to_trading_days(prices, monkeypatch):

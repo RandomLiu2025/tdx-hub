@@ -1,8 +1,6 @@
 import hashlib
 import re
 from pathlib import Path
-from struct import calcsize
-from struct import unpack
 
 import httpx
 import pandas as pd
@@ -13,6 +11,7 @@ from tdxhub.consts import MARKET_BJ
 from tdxhub.consts import MARKET_SH
 from tdxhub.consts import MARKET_SZ
 from tdxhub.logger import logger
+from tdxhub.tdx.financial_data import parse_financial_dat
 
 # 默认请求超时（秒）
 _DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
@@ -35,9 +34,9 @@ normalize_symbol = _normalize_symbol
 
 
 def get_stock_markets(symbols=None):
-    """Normalize a collection of security codes for ``tdxpy``.
+    """Normalize a collection of security codes for the TDX client.
 
-    ``tdxpy`` expects ``(market, code)`` pairs, while callers commonly pass
+    The client expects ``(market, code)`` pairs, while callers commonly pass
     prefixed codes such as ``SH.600000``.  Keep accepting lists and tuples for
     backwards compatibility, but reject strings explicitly so a single code
     is not accidentally iterated character by character.
@@ -80,33 +79,10 @@ def get_stock_market(symbol='', string=False):
     return {'sh': MARKET_SH, 'sz': MARKET_SZ, 'bj': MARKET_BJ}[market]
 
 def gpcw(filepath):
-    header_format = '<3hH3L'
-    item_format = '<6scL'
-    header_size = calcsize(header_format)
-    item_size = calcsize(item_format)
-    info_size = calcsize('<264f')
-
+    """Read every header-declared field from a .dat file as (code, values)."""
     with Path(filepath).open('rb') as cw_file:
-        data_header = cw_file.read(header_size)
-        if len(data_header) != header_size:
-            raise ValueError('财务文件头不完整')
-        max_count = unpack(header_format, data_header)[3]
-
-        results = []
-        for idx in range(max_count):
-            cw_file.seek(header_size + idx * item_size)
-            item = cw_file.read(item_size)
-            if len(item) != item_size:
-                raise ValueError(f'第 {idx} 条财务索引不完整')
-            stock_item = unpack(item_format, item)
-            code = stock_item[0].decode('ascii').rstrip('\x00')
-            cw_file.seek(stock_item[2])
-            info_data = cw_file.read(info_size)
-            if len(info_data) != info_size:
-                raise ValueError(f'{code} 的财务记录不完整')
-            results.append((code, unpack('<264f', info_data)))
-
-    return results
+        records = parse_financial_dat(cw_file.read())
+    return [(record[0], record[2:]) for record in records]
 
 
 def md5sum(downfile):
@@ -155,7 +131,7 @@ def to_data(v, **kwargs):
     elif isinstance(v, (list, tuple)):
         result = pd.DataFrame(v) if len(v) else pd.DataFrame()
     else:
-        # Some tdxpy versions return a NumPy array or another tabular object.
+        # Clients may return a NumPy array or another tabular object.
         # Let pandas handle it, but consistently return an empty frame for
         # scalar/unsupported values instead of raising from a truth check.
         try:

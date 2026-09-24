@@ -14,17 +14,25 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        dependencies: [core, all]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-      - name: Install package and tests
-        run: python -m pip install --upgrade pip ".[all,test]"
-      - name: Run deterministic test suite
-        run: python -m pytest
-      - name: Build wheel
-        run: python -m pip wheel --no-deps --wheel-dir dist .
-      - name: Verify wheel package data
-        run: python -c "import glob, zipfile; wheel = glob.glob('dist/*.whl')[0]; assert 'tdxhub/utils/holiday.js' in zipfile.ZipFile(wheel).namelist()"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked core and tests
+        if: matrix.dependencies == 'core'
+        run: uv sync --frozen --extra test
+      - name: Install locked optional dependencies and tests
+        if: matrix.dependencies == 'all'
+        run: uv sync --frozen --all-extras
+      - run: uv lock --check
+      - run: uv pip check
+      - run: uvx ruff check --select E9,F63,F7,F82 tdxhub tests scripts
+      - run: uv run --frozen --no-sync python -m compileall -q tdxhub tests scripts
+      - run: uv run --frozen --no-sync pytest
+  wheel:
+    uses: ./.github/workflows/django.yml

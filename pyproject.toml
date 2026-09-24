@@ -1,15 +1,16 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "tdxhub-sdk"
-version = "0.2.0"
+version = "0.3.0"
 description = "通达信本地数据、行情与财务数据读取工具"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{name = "randon"}]
+license-files = ["LICENSE", "AUTHORS.rst"]
+authors = [{name = "random"}]
 keywords = ["tongdaxin", "tdx", "finance", "market-data", "pandas"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -28,7 +29,6 @@ dependencies = [
     "numpy>=1.26,<3",
     "pandas>=2.2,<4",
     "prettytable>=3.10,<4",
-    "tdxpy>=0.2.7,<1",
     "tenacity>=8.2,<10",
     "tqdm>=4.66,<5",
 ]

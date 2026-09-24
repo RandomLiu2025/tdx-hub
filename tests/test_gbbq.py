@@ -298,3 +298,23 @@ def test_enrich_turnover_returns_typed_column_for_empty_bars():
     assert result.empty
     assert result.columns.tolist() == ["turnover"]
     assert str(result["turnover"].dtype) == "float64"
+
+
+@pytest.mark.parametrize("marked,scale", [(True, 10_000), (False, 1)])
+def test_equity_snapshot_converts_units_before_truncating(marked, scale):
+    actions = _actions([{
+        "date": "2026-06-10", "category": 9,
+        "panhouliutong": 8662.2138671875,
+        "houzongguben": 11490.814453125,
+    }])
+    if marked:
+        actions.attrs["equity_unit"] = "ten_thousand_shares"
+    original = actions.copy(deep=True)
+
+    snapshot = get_equity_snapshot(actions)
+
+    assert snapshot.float_equity == int(8662.2138671875 * scale)
+    assert snapshot.total_equity == int(11490.814453125 * scale)
+    assert snapshot.turnover(1_056_300) == pytest.approx(1_056_300 / snapshot.float_equity * 100)
+    pd.testing.assert_frame_equal(actions, original)
+    assert actions.attrs == original.attrs

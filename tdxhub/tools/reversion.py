@@ -5,6 +5,8 @@ from __future__ import annotations
 import pandas as pd
 
 from tdxhub.gbbq import adjust_prices, adjustment_factors, normalize_gbbq
+from tdxhub.tdx.codec import get_security_type
+from tdxhub.utils import _normalize_symbol, get_stock_market
 from tdxhub.utils.factor import fq_factor
 
 _OHLC = ["open", "high", "low", "close"]
@@ -57,13 +59,16 @@ def _reference_preclose(raw: pd.DataFrame, actions: pd.DataFrame) -> pd.Series:
     if len(raw) < 2 or actions.empty:
         return result
 
-    events = actions.loc[actions["category"].eq(1)].sort_index(kind="stable")
+    events = actions.loc[actions["category"].isin([1, 11])].sort_index(kind="stable")
     for position in range(1, len(raw)):
         previous_day = pd.Timestamp(raw.index[position - 1]).normalize()
         current_day = pd.Timestamp(raw.index[position]).normalize()
         interval = events.loc[(events.index > previous_day) & (events.index <= current_day)]
         price = result.iloc[position]
         for _, event in interval.iterrows():
+            if event["category"] == 11:
+                price /= event["suogu"]
+                continue
             denominator = 10 + event.get("peigu", 0) + event.get("songzhuangu", 0)
             if denominator == 0:
                 continue
@@ -76,8 +81,10 @@ def _reference_preclose(raw: pd.DataFrame, actions: pd.DataFrame) -> pd.Series:
     return result
 
 
-def _reversion(bfq_data: pd.DataFrame, xdxr_data: pd.DataFrame, type_: str) -> pd.DataFrame:
-    """Adjust stock prices using TDX category-1 corporate actions."""
+def _reversion(
+    bfq_data: pd.DataFrame, xdxr_data: pd.DataFrame, type_: str, *, price_decimals: int = 2
+) -> pd.DataFrame:
+    """Adjust prices, preserving actual volume and amount across corporate actions."""
 
     method = _method(type_)
     if bfq_data is None or bfq_data.empty:
@@ -85,60 +92,54 @@ def _reversion(bfq_data: pd.DataFrame, xdxr_data: pd.DataFrame, type_: str) -> p
 
     raw = bfq_data.sort_index().copy()
     actions = _prepare_actions(xdxr_data)
-    if actions.empty or "category" not in actions or not actions["category"].eq(1).any():
+    if actions.empty or "category" not in actions or not actions["category"].isin([1, 11]).any():
         return raw
 
     if "volume" not in raw and "vol" in raw:
         raw["volume"] = raw["vol"]
-    required = set(_OHLC + ["volume"])
+    required = set(_OHLC)
     missing = sorted(required.difference(raw.columns))
     if missing:
         raise ValueError(f"行情数据缺少字段: {', '.join(missing)}")
     if not isinstance(raw.index, pd.DatetimeIndex):
         raise ValueError("行情数据索引必须是日期")
 
-    raw["preclose"] = _reference_preclose(raw, actions)
     factors = adjustment_factors(raw.index, actions)
-    result = adjust_prices(raw, actions, method)
+    raw["preclose"] = _reference_preclose(raw, actions)
+    result = adjust_prices(raw, actions, method, price_decimals=price_decimals)
     result["adj"] = factors[f"{method}_mul"].to_numpy()
-    result["volume"] = result["volume"].astype(float) / result["adj"]
     return result.loc[result["open"].ne(0)]
 
 
 def etf_reversion(data: pd.DataFrame, xdxr: pd.DataFrame, adjust: str = "01") -> pd.DataFrame:
-    """Adjust fund prices using TDX category-11 split factors."""
+    """Adjust fund dividends and splits together, retaining milliyuan precision."""
 
-    method = _method(adjust)
-    actions = _prepare_actions(xdxr)
-    if data is None or data.empty or actions.empty or "category" not in actions:
-        return data.copy()
-    actions = actions.loc[actions["category"].eq(11)]
-    if actions.empty or "suogu" not in actions:
-        return data.copy()
-
+    if data is None or data.empty:
+        _method(adjust)
+        return pd.DataFrame() if data is None else data.copy()
     result = data.copy()
     if not isinstance(result.index, pd.DatetimeIndex):
         if {"year", "month", "day"}.issubset(result.columns):
             result.index = pd.to_datetime(result[["year", "month", "day"]])
         elif "datetime" in result:
             result.index = pd.to_datetime(result["datetime"])
+        elif "date" in result:
+            result.index = pd.to_datetime(result["date"])
         else:
             raise ValueError("基金行情缺少日期")
-
-    factors = actions["suogu"].reindex(actions.index.union(result.index)).sort_index()
-    factors = (factors.bfill() if method == "qfq" else factors.ffill()).reindex(result.index).fillna(1.0)
-    if method == "qfq":
-        factors = factors.shift(-1, fill_value=1.0)
-    for column in _OHLC:
-        result[column] = result[column] / factors if method == "qfq" else result[column] * factors
-    return result
+    return _reversion(result, xdxr, adjust, price_decimals=3)
 
 
 def reversion(symbol: str, stock_data: pd.DataFrame, xdxr: pd.DataFrame, type_: str = "01") -> pd.DataFrame:
     """Adjust an OHLCV frame using the supplied TDX corporate actions."""
 
     _method(type_)
-    if symbol.startswith(("15", "16", "50", "51")):
+    _, code = _normalize_symbol(symbol)
+    try:
+        is_fund = get_security_type(get_stock_market(symbol), code).endswith("_FUND")
+    except NotImplementedError:
+        is_fund = False
+    if is_fund:
         return etf_reversion(stock_data, xdxr, type_)
     return _reversion(stock_data, xdxr, type_)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from datetime import date, datetime, time
@@ -141,15 +142,65 @@ def select_latest_minute_bars(bars: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _auction_values(trades, volume_multiplier):
+    missing = (float("nan"), 0, 0, 0, "missing")
+    if not isinstance(trades, pd.DataFrame) or trades.empty:
+        return missing
+    candidates = []
+    for row in trades.to_dict("records"):
+        trade_time = _trade_time(row.get("time"))
+        if (trade_time is None or not time(9, 25) <= trade_time < _AUCTION_CUTOFF
+                or row.get("buyorsell") not in (0, 1, 2)):
+            continue
+        try:
+            price = float(row.get("price"))
+            volume = float(row.get("vol", row.get("volume")))
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(price) and price > 0 and math.isfinite(volume) and volume > 0):
+            continue
+        candidates.append((price, volume, _number(row.get("num"))))
+    if not candidates:
+        return missing
+    if len({price for price, _, _ in candidates}) != 1:
+        return (*missing[:4], "inconsistent")
+    price = candidates[0][0]
+    volume = sum(item[1] for item in candidates) * volume_multiplier
+    order = sum(item[2] for item in candidates)
+    amount = price * volume
+    if not math.isfinite(volume) or not math.isfinite(amount):
+        return (*missing[:4], "inconsistent")
+    return price, volume, amount, order, "derived"
+
+
+def _fits_first_bar(bar, price, volume, amount):
+    try:
+        vol, shares, turnover, low, high = (
+            float(bar.get(field)) for field in ("vol", "volume", "amount", "low", "high")
+        )
+    except (TypeError, ValueError):
+        return False
+    return (
+        all(math.isfinite(value) and value > 0 for value in (vol, shares, turnover, low, high))
+        and volume <= min(vol, shares)
+        and amount <= turnover + 0.01
+        and low <= price <= high
+    )
+
+
 def build_minute_241(
     bars: pd.DataFrame,
     trades_by_date: Mapping[object, pd.DataFrame],
+    *,
+    volume_multiplier: float = 100,
 ) -> pd.DataFrame:
-    """Insert a 09:30 call-auction bar before each trading day's 09:31 bar.
+    """Split confirmed auction volume from 09:31, in stock/fund share units.
 
-    This follows the Go client's compatibility behavior, including inserting a
-    zero-valued 09:30 bar when no valid pre-09:30 trade exists.
+    Unknown or inconsistent auctions get a null-price placeholder. The 09:31
+    OHLC remains the source bar's OHLC; it cannot be reconstructed from sums.
     """
+    if not math.isfinite(volume_multiplier) or volume_multiplier <= 0:
+        raise ValueError("volume_multiplier 必须为正有限数")
     result = bars.copy(deep=True)
     original_attrs = dict(bars.attrs)
     if result.empty:
@@ -177,6 +228,8 @@ def build_minute_241(
             raise ValueError("分钟 K 线缺少 close 字段")
         result["last"] = result["close"].shift(1).fillna(0)
 
+    if "auction_status" not in result:
+        result["auction_status"] = "not_applicable"
     normalized_trades = {_trade_date(key): value for key, value in trades_by_date.items()}
     inserted = []
     target_positions = [
@@ -187,18 +240,15 @@ def build_minute_241(
 
     for position in target_positions:
         timestamp = timestamps[position]
-        trades = normalized_trades.get(timestamp.date())
-        price = volume = amount = order = 0
-        if isinstance(trades, pd.DataFrame) and not trades.empty:
-            first = trades.iloc[0]
-            first_time = _trade_time(first.get("time"))
-            if first_time is not None and first_time < _AUCTION_CUTOFF:
-                price = _number(first.get("price"))
-                volume = _number(first.get("vol", first.get("volume")))
-                order = _number(first.get("num"))
-                amount = price * volume * 100
-
         auction_time = timestamp.replace(hour=9, minute=30, second=0, microsecond=0)
+        if auction_time in result.index:
+            continue
+        trades = normalized_trades.get(timestamp.date())
+        price, volume, amount, order, status = _auction_values(trades, volume_multiplier)
+        first_bar = result.iloc[position]
+        if status == "derived" and not _fits_first_bar(first_bar, price, volume, amount):
+            price, volume, amount, order, status = float("nan"), 0, 0, 0, "inconsistent"
+
         auction = result.iloc[position].copy()
         previous = _number(auction["last"])
         for column in ("open", "high", "low", "close"):
@@ -210,6 +260,7 @@ def build_minute_241(
         auction["amount"] = amount
         auction["order"] = order
         auction["last"] = previous
+        auction["auction_status"] = status
         if "datetime" in result.columns:
             auction["datetime"] = _datetime_value_like(auction["datetime"], auction_time)
         for column, value in (
@@ -223,6 +274,8 @@ def build_minute_241(
                 auction[column] = value
         inserted.append(pd.DataFrame([auction], index=pd.DatetimeIndex([auction_time])))
 
+        if status != "derived":
+            continue
         result.iloc[position, result.columns.get_loc("last")] = price
         for column, deduction in (("vol", volume), ("volume", volume), ("amount", amount), ("order", order)):
             column_position = result.columns.get_loc(column)

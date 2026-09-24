@@ -151,9 +151,8 @@ def equity_values(
     if actions is not None and not actions.empty:
         snapshot = get_equity_snapshot(actions, code=code if "code" in actions.columns else None)
 
-    scale = 10_000 if actions is not None and actions.attrs.get("equity_unit") == "ten_thousand_shares" else 1
-    circulating = safe_number(snapshot.float_equity * scale) if snapshot is not None else None
-    total = safe_number(snapshot.total_equity * scale) if snapshot is not None else None
+    circulating = safe_number(snapshot.float_equity) if snapshot is not None else None
+    total = safe_number(snapshot.total_equity) if snapshot is not None else None
     if circulating is None or circulating <= 0:
         circulating = safe_number((finance or {}).get("liutongguben"))
     if total is None or total <= 0:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from math import isfinite
 from pathlib import Path
 from typing import TypeAlias
 
@@ -62,11 +63,20 @@ def _number(value: str) -> int:
         return 0
 
 
-def _float(value: str) -> float:
+def _optional_float(value: str, *, multiplier: float = 1.0) -> float:
+    """Preserve unknown report values as NaN, not a fabricated zero."""
     try:
-        return float(value.strip())
+        number = float(value.strip()) * multiplier
     except (TypeError, ValueError):
-        return 0.0
+        return float("nan")
+    return number if isfinite(number) else float("nan")
+
+
+def _optional_number(value: str) -> int | None:
+    try:
+        return int(value.strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _field(fields: list[str], index: int) -> str:
@@ -435,16 +445,16 @@ def parse_tdxstat(source: OfficialSource, *, source_name: str = "tdxstat.cfg") -
                 "market": _market(fields[0]),
                 "code": fields[1],
                 "date": _field(fields, 4),
-                "pe_ttm": _float(_field(fields, 3)),
-                "trend_days": _number(_field(fields, 5)),
-                "change_pct": _float(_field(fields, 6)),
-                "pe_static": _float(_field(fields, 9)),
-                "dividend_yield": _float(_field(fields, 10)),
-                "change_5d": _float(_field(fields, 28)),
-                "change_10d": _float(_field(fields, 30)),
-                "change_20d": _float(_field(fields, 18)),
-                "change_60d": _float(_field(fields, 20)),
-                "change_ytd": _float(_field(fields, 21)),
+                "pe_ttm": _optional_float(_field(fields, 3)),
+                "trend_days": _optional_number(_field(fields, 5)),
+                "change_pct": _optional_float(_field(fields, 6)),
+                "pe_static": _optional_float(_field(fields, 9)),
+                "dividend_yield": _optional_float(_field(fields, 10)),
+                "change_5d": _optional_float(_field(fields, 28)),
+                "change_10d": _optional_float(_field(fields, 30)),
+                "change_20d": _optional_float(_field(fields, 18)),
+                "change_60d": _optional_float(_field(fields, 20)),
+                "change_ytd": _optional_float(_field(fields, 21)),
                 "source": resolved_source,
                 "raw_fields": fields,
             }
@@ -471,7 +481,7 @@ def parse_tdxstat(source: OfficialSource, *, source_name: str = "tdxstat.cfg") -
 
 
 def parse_tdxstat2(source: OfficialSource, *, source_name: str = "tdxstat2.cfg") -> pd.DataFrame:
-    """Parse money-flow and block-membership fields from ``tdxstat2.cfg``."""
+    """Parse ``tdxstat2.cfg``; amounts are yuan, raw_fields retain 10k yuan."""
     text, resolved_source = _load(source, source_name)
     records: list[dict] = []
 
@@ -488,11 +498,11 @@ def parse_tdxstat2(source: OfficialSource, *, source_name: str = "tdxstat2.cfg")
                 "code": fields[1],
                 "date": _field(fields, 2),
                 "block_index": _field(fields, 13),
-                "amount": _float(_field(fields, 3)),
-                "amount_prev": _float(_field(fields, 5)),
-                "ipo_price": _float(_field(fields, 16)),
-                "high_52w": _float(_field(fields, 17)),
-                "low_52w": _float(_field(fields, 18)),
+                "amount": _optional_float(_field(fields, 3), multiplier=10_000),
+                "amount_prev": _optional_float(_field(fields, 5), multiplier=10_000),
+                "ipo_price": _optional_float(_field(fields, 16)),
+                "high_52w": _optional_float(_field(fields, 17)),
+                "low_52w": _optional_float(_field(fields, 18)),
                 "source": resolved_source,
                 "raw_fields": fields,
             }
@@ -511,7 +521,10 @@ def parse_tdxstat2(source: OfficialSource, *, source_name: str = "tdxstat2.cfg")
         "source",
         "raw_fields",
     ]
-    return _frame(records, columns, resolved_source)
+    result = _frame(records, columns, resolved_source)
+    result.attrs["amount_unit"] = "yuan"
+    result.attrs["source_amount_unit"] = "ten_thousand_yuan"
+    return result
 
 
 def parse_xgsg(source: OfficialSource, *, source_name: str = "xgsg.cfg") -> pd.DataFrame:
@@ -531,7 +544,7 @@ def parse_xgsg(source: OfficialSource, *, source_name: str = "xgsg.cfg") -> pd.D
                 "market": _market(fields[0]),
                 "code": fields[1],
                 "date": _field(fields, 2),
-                "issue_price": _float(_field(fields, 3)),
+                "issue_price": _optional_float(_field(fields, 3)),
                 "name": _field(fields, 14),
                 "source": resolved_source,
                 "raw_fields": fields,

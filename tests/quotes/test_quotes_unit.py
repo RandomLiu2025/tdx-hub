@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import pandas as pd
-import pytest
 from unittest import mock
 
+import pandas as pd
+import pytest
 
 from tdxhub import config
 from tdxhub.exceptions import TdxhubValidationException
@@ -29,7 +29,7 @@ class FakeHqApi:
 
 
 def test_std_client_uses_default_when_bestip_is_empty(monkeypatch):
-    monkeypatch.setattr("tdxhub.quotes.TdxHq_API", FakeHqApi)
+    monkeypatch.setattr("tdxhub.quotes.StandardClient", FakeHqApi)
     config.setup(force=True)
     config.set("BESTIP.HQ", "")
 
@@ -232,7 +232,9 @@ def test_capital_flow_history_calculation():
     assert "main_20d_net" in df.columns
     # Each day: buy 1.5M, sell 0.5M => net 1.0M. Total 5 days = 5.0M
     assert df.attrs["main_5d_net"] == 5_000_000.0
-    assert df.attrs["main_20d_net"] == 5_000_000.0
+    assert pd.isna(df.attrs["main_20d_net"])
+    assert df.attrs["window_20d_days"] == 6
+    assert df.attrs["window_20d_complete"] is False
     assert df.attrs["days"] == 5
 
     # Test money_flow routing with days
@@ -331,7 +333,8 @@ def test_sector_capital_flow():
 
 
 def test_xgsg_and_ipo_aliases():
-    quotes = StdQuotes()
+    quotes = object.__new__(StdQuotes)
+    quotes._get_zhb_file = mock.Mock(return_value=b"mock xgsg.cfg")
     fake_xgsg_df = pd.DataFrame([
         {
             "market": "sz",
@@ -353,7 +356,7 @@ def test_xgsg_and_ipo_aliases():
         },
     ])
 
-    with mock.patch("tdxhub.official.parse_xgsg", return_value=fake_xgsg_df):
+    with mock.patch("tdxhub.official.parse_xgsg", return_value=fake_xgsg_df) as parse_xgsg:
         # 1. Fetch all
         all_ipo = quotes.xgsg()
         assert len(all_ipo) == 2
@@ -371,3 +374,6 @@ def test_xgsg_and_ipo_aliases():
         single_prefix = quotes.ipo("sz001246")
         assert len(single_prefix) == 1
         assert single_prefix.iloc[0]["code"] == "001246"
+
+        assert quotes._get_zhb_file.call_args_list == [mock.call("xgsg.cfg")] * 4
+        assert parse_xgsg.call_args_list == [mock.call(b"mock xgsg.cfg")] * 4

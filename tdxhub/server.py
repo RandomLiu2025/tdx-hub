@@ -12,13 +12,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from tdxpy.constants import hq_hosts
-from tdxpy.exceptions import TdxConnectionError, TdxFunctionCallError
-from tdxpy.exhq import TdxExHq_API
-from tdxpy.hq import TdxHq_API
-
 from tdxhub.consts import CONFIG, EX_HOSTS, GP_HOSTS, HQ_HOSTS
 from tdxhub.logger import logger
+from tdxhub.tdx.client import StandardClient
+from tdxhub.tdx.constants import hq_hosts
+from tdxhub.tdx.errors import TdxConnectionError, TdxFunctionCallError
+from tdxhub.tdx.extended import ExtendedClient
 from tdxhub.utils import get_config_path
 
 
@@ -66,7 +65,7 @@ def connect2(proxy: dict, index: str = "HQ") -> dict:
         return connect(proxy)
 
     result = dict(proxy, time=None)
-    api = TdxHq_API() if index == "HQ" else TdxExHq_API()
+    api = StandardClient() if index == "HQ" else ExtendedClient()
     try:
         with api.connect(result["addr"], int(result["port"]), time_out=0.7):
             started = time.perf_counter()

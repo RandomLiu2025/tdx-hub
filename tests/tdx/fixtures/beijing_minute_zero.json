@@ -1,0 +1,71 @@
+{
+  "source": "2026-09-20 original/vendored A/B capture at 117.34.114.18:7709; bj_minute_5, category=8, market=2, code=920001, start=0, count=5. Both bodies identical. Expected nonnegative finite values independently decoded with struct IEEE-754 float32, not vendor helper.",
+  "body_hex": "050096b38003b4b6014a005400382e47b35cfe4896b38103000a0a4a00d42d47d723fe4896b38203000000000000164400b0e24596b3830300000000000000000000000096b384030000000000808947c6204949",
+  "records": [
+    {
+      "datetime_parts": [
+        2026,
+        9,
+        18,
+        14,
+        56
+      ],
+      "vol_raw": 1194211328,
+      "amount_raw": 1224629427,
+      "vol": 44600.0,
+      "amount": 520933.59375
+    },
+    {
+      "datetime_parts": [
+        2026,
+        9,
+        18,
+        14,
+        57
+      ],
+      "vol_raw": 1194185728,
+      "amount_raw": 1224614871,
+      "vol": 44500.0,
+      "amount": 520478.71875
+    },
+    {
+      "datetime_parts": [
+        2026,
+        9,
+        18,
+        14,
+        58
+      ],
+      "vol_raw": 1142292480,
+      "amount_raw": 1172484096,
+      "vol": 600.0,
+      "amount": 7254.0
+    },
+    {
+      "datetime_parts": [
+        2026,
+        9,
+        18,
+        14,
+        59
+      ],
+      "vol_raw": 0,
+      "amount_raw": 0,
+      "vol": 0.0,
+      "amount": 0.0
+    },
+    {
+      "datetime_parts": [
+        2026,
+        9,
+        18,
+        15,
+        0
+      ],
+      "vol_raw": 1200193536,
+      "amount_raw": 1229529286,
+      "vol": 70400.0,
+      "amount": 823820.375
+    }
+  ]
+}

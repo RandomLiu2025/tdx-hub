@@ -2,11 +2,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from tdxpy.reader import CustomerBlockReader
-
-from tdxhub.consts import TYPE_FLATS
-from tdxhub.consts import TYPE_GROUP
+from tdxhub.consts import TYPE_FLATS, TYPE_GROUP
 from tdxhub.logger import logger
+from tdxhub.tdx.files import CustomerBlockReader
 from tdxhub.utils import get_stock_market
 
 # Python 3.7+ 内置 time.time_ns，无需兼容回退

@@ -41,7 +41,6 @@ _PRICE_COLUMNS = ("open", "high", "low", "close", "high_limit", "low_limit", "pr
 _ZERO = Decimal(0)
 _ONE = Decimal(1)
 _TEN = Decimal(10)
-_CENT = Decimal("0.01")
 
 
 @dataclass(frozen=True)
@@ -232,7 +231,12 @@ def get_equity_snapshot(
     *,
     code: str | None = None,
 ) -> EquitySnapshot | None:
-    """Return the latest effective equity record at or before ``at``."""
+    """Return the latest effective equity record at or before ``at``, in shares.
+
+    Marked XDXR frames use ten-thousand shares; convert before truncating
+    fractional shares so the fractional ten-thousands are not discarded.
+    Unmarked local GBBQ frames already use shares.
+    """
 
     actions = normalize_gbbq(data)
     if actions.empty:
@@ -249,6 +253,7 @@ def get_equity_snapshot(
         return None
 
     row = equity.iloc[-1]
+    scale = 10_000 if actions.attrs.get("equity_unit") == "ten_thousand_shares" else 1
     row_code = row.get("code")
     if pd.isna(row_code):
         row_code = None
@@ -256,8 +261,8 @@ def get_equity_snapshot(
         date=pd.Timestamp(equity.index[-1]),
         category=int(row["category"]),
         code=None if row_code is None else str(row_code),
-        float_equity=_integer_value(row.get("panhouliutong", 0)),
-        total_equity=_integer_value(row.get("houzongguben", 0)),
+        float_equity=_integer_value(row.get("panhouliutong", 0) * scale),
+        total_equity=_integer_value(row.get("houzongguben", 0) * scale),
     )
 
 
@@ -282,6 +287,11 @@ def _normalize_dates(dates: Iterable[object]) -> pd.DatetimeIndex:
 
 
 def _event_coefficients(row: pd.Series) -> tuple[Decimal, Decimal]:
+    if row["category"] == 11:
+        ratio = _decimal(row.get("suogu", 0))
+        if not ratio.is_finite() or ratio <= 0:
+            raise ValueError("扩缩股 suogu 必须是正有限数")
+        return ratio, _ZERO
     dividend = _decimal(row.get("fenhong", 0))
     rights_price = _decimal(row.get("peigujia", 0))
     bonus = _decimal(row.get("songzhuangu", 0))
@@ -306,15 +316,15 @@ def _decimal_factors(
         return trading_dates, identity
 
     events = normalized.loc[
-        normalized["category"].eq(1) & (normalized.index <= trading_dates.max())
+        normalized["category"].isin([1, 11]) & (normalized.index <= trading_dates.max())
     ]
     if events.empty:
         identity = [(_ONE, _ZERO, _ONE, _ZERO) for _ in trading_dates]
         return trading_dates, identity
 
-    # A descending stable sort applies equal-date records in source order while
-    # walking from the newest trading date into history.
-    ordered_events = list(events.sort_index(ascending=False, kind="stable").iterrows())
+    # Compose backwards: reverse chronological order INCLUDING same-day source
+    # order. This represents applying the original events forwards in time.
+    ordered_events = list(events.sort_index(kind="stable").iloc[::-1].iterrows())
     positions = sorted(range(len(trading_dates)), key=lambda index: trading_dates[index], reverse=True)
     qfq = [(_ONE, _ZERO) for _ in trading_dates]
     multiplier, offset = _ONE, _ZERO
@@ -362,17 +372,22 @@ def _method(value: str) -> str:
     return method
 
 
-def _round_price(raw: object, multiplier: Decimal, offset: Decimal) -> float:
+def _round_price(raw: object, multiplier: Decimal, offset: Decimal, quantum: Decimal) -> float:
     if pd.isna(raw):
         return float("nan")
     adjusted = multiplier * _decimal(raw) + offset
-    return float(adjusted.quantize(_CENT, rounding=ROUND_HALF_UP))
+    return float(adjusted.quantize(quantum, rounding=ROUND_HALF_UP))
 
 
-def adjust_prices(prices: pd.DataFrame | None, actions: pd.DataFrame | None, method: str = "qfq") -> pd.DataFrame:
+def adjust_prices(
+    prices: pd.DataFrame | None, actions: pd.DataFrame | None, method: str = "qfq", *, price_decimals: int = 2
+) -> pd.DataFrame:
     """Apply exact affine GBBQ adjustment without changing volume or amount."""
 
     normalized_method = _method(method)
+    if price_decimals not in (2, 3):
+        raise ValueError("价格精度仅支持 2 或 3 位小数")
+    quantum = Decimal(1).scaleb(-price_decimals)
     if prices is None:
         return pd.DataFrame()
     result = prices.copy()
@@ -394,7 +409,7 @@ def adjust_prices(prices: pd.DataFrame | None, actions: pd.DataFrame | None, met
         if column not in result.columns:
             continue
         result[column] = [
-            _round_price(raw, factor[factor_offset], factor[factor_offset + 1])
+            _round_price(raw, factor[factor_offset], factor[factor_offset + 1], quantum)
             for raw, factor in zip(result[column], factors, strict=True)
         ]
     return result

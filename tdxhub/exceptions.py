@@ -34,6 +34,10 @@ class TdxhubConnectionError(TdxhubException, ConnectionError):
     """Raised when no configured quote endpoint can be reached."""
 
 
+class TdxhubIncompleteDataError(TdxhubException):
+    """Raised when a requested aggregate cannot be computed from complete data."""
+
+
 class TdxhubModuleNotFoundError(TdxhubException, ModuleNotFoundError):
     """Raised when an optional integration dependency is unavailable."""
 
