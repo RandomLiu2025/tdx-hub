@@ -59,9 +59,9 @@ def check_contents(read, names, metadata_path, version):
 
     # The root README is shipped as sdist source and wheel/sdist long description.
     assert metadata["Description-Content-Type"] == "text/markdown"
-    assert metadata.get_payload(decode=True).decode("utf-8").rstrip("\n") == (ROOT / "README.md").read_text(
-        encoding="utf-8"
-    ).rstrip("\n")
+    payload = metadata.get_payload(decode=True).decode("utf-8").replace("\r\n", "\n").rstrip("\n")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8").replace("\r\n", "\n").rstrip("\n")
+    assert payload == readme
     if metadata_path == "PKG-INFO":
         assert "README.md" in names
         assert read("README.md") == (ROOT / "README.md").read_bytes()
