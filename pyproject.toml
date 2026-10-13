@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tdxhub-sdk"
-version = "0.3.0"
+version = "0.3.1"
 description = "通达信本地数据、行情与财务数据读取工具"
 readme = "README.md"
 requires-python = ">=3.11"
