@@ -247,6 +247,9 @@ def test_statistics_symbols_filter():
     import unittest.mock as mock
 
     class _MockStatQuotes(StdQuotes):
+        def __init__(self):
+            pass
+
         def _get_zhb_file(self, filename):
             return b"fake"
 
@@ -298,6 +301,9 @@ def test_statistics_symbols_filter():
 
 def test_sector_capital_flow():
     class _MockSectorQuotes(StdQuotes):
+        def __init__(self):
+            pass
+
         def stock_industries(self, symbols=None, **kwargs):
             return pd.DataFrame([
                 {"code": "600519", "tdx_industry_name": "白酒", "sw_industry_name": "白酒", "sw_level1_name": "食品饮料"},
