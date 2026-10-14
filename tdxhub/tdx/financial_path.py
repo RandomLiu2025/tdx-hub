@@ -1,9 +1,16 @@
 """Keep server-supplied financial filenames inside the caller's directory."""
 
+import ntpath
 import tempfile
 from pathlib import Path, PureWindowsPath
 
 from .financial_integrity import validate_financial_metadata, verify_financial_file
+
+
+def _is_reserved(filename: str) -> bool:
+    if hasattr(ntpath, "isreserved"):
+        return ntpath.isreserved(filename)
+    return PureWindowsPath(filename).is_reserved()
 
 
 def validate_financial_filename(filename: str) -> str:
@@ -15,7 +22,7 @@ def validate_financial_filename(filename: str) -> str:
         or any(char in filename for char in '/\\:<>"|?*')
         or any(ord(char) < 32 or ord(char) == 127 for char in filename)
         or filename.endswith((".", " "))
-        or PureWindowsPath(filename).is_reserved()
+        or _is_reserved(filename)
     ):
         raise ValueError(f"非法财务文件名（只允许普通文件名）: {filename!r}")
     return filename
